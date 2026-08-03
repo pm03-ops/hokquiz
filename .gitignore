@@ -1,0 +1,21 @@
+# 作業系統 / 編輯器
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+
+# 測試 / 暫存檔
+test_*.xlsx
+test_*.docx
+*.tmp
+
+# 相依套件（目前純靜態，用不到；保留以防未來加工具）
+node_modules/
+
+# ⚠️ 絕不要提交任何金鑰檔
+*.key
+*.pem
+secrets.*
+.env
+.env.*
