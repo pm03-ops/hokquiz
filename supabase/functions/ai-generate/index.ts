@@ -100,7 +100,7 @@ Deno.serve(async (req: Request) => {
       const stem = String(body.stem || ""), correct = String(body.correct || "");
       if (!correct) return json({ error: "請先填正解" });
       const prompt =
-        `你是護理與長照教育講師。針對以下題目與簡短正解，寫出「一句完整敘述」的答案，放在字卡背面用。要求：繁體中文、用完整句子清楚說明正解（比簡短正解更完整、更好懂）、1–2 句、不要列出其他選項、不要 JSON、不要引號。\n題幹：${stem}\n簡短正解：${correct}`;
+        `你是護理與長照教育講師。針對以下題目與簡短正解，寫出「一句可獨立閱讀的完整敘述」，同時當作課本重點的標題與字卡背面答案。\n嚴格要求：繁體中文、必須包含主題／主詞，讓人「不看題目」也能完全理解（例如寫「成人 CPR 胸外按壓深度應至少 5 公分（約 5–6 公分）」，而不是只寫「至少 5 公分」）、1–2 句、不要列出其他選項、不要 JSON、不要引號。\n題幹：${stem}\n簡短正解：${correct}`;
       const t = (await gemini(prompt, { json: false }) || "").trim();
       return json({ flashAnswer: t.replace(/^["「『]|["」』]$/g, "").trim() });
     }
@@ -110,7 +110,7 @@ Deno.serve(async (req: Request) => {
       const n = Math.min(20, Math.max(1, Number(body.n) || 5));
       if (text.trim().length < 10) return json({ error: "教材內容太短" });
       const prompt =
-        `你是護理與長照教育的出題助手。根據以下教材，出「${n}」題繁體中文單選題。每題需包含：\n- stem：題幹\n- correct：簡短的正確選項（幾個字或一個詞組，用於測驗選項）\n- distractors：3 個合理但明確錯誤的簡短干擾選項（長度與 correct 相近）\n- flash_answer：一句「完整敘述」的正確答案（放在字卡背面），用完整句子清楚說明正解，比 correct 更完整易懂\n- explain：3–5 句教學解說，說明正解觀念與一個容易混淆或常犯的重點，讓學員光看解說也能學會\n內容必須與教材與本題緊密相符。\n教材內容：\n${text.slice(0, 8000)}`;
+        `你是護理與長照教育的出題助手。根據以下教材，出「${n}」題繁體中文單選題。每題需包含：\n- stem：題幹\n- correct：簡短的正確選項（幾個字或一個詞組，用於測驗選項）\n- distractors：3 個合理但明確錯誤的簡短干擾選項（長度與 correct 相近）\n- flash_answer：一句「可獨立閱讀的完整敘述」，同時當作課本重點的標題。必須包含主題／主詞，讓人不看題目也能理解（例如寫「成人 CPR 胸外按壓深度應至少 5 公分」，而非只寫「至少 5 公分」）\n- explain：3–5 句教學解說，說明正解觀念與一個容易混淆或常犯的重點，讓學員光看解說也能學會\n內容必須與教材與本題緊密相符。\n教材內容：\n${text.slice(0, 8000)}`;
       const questionSchema = {
         type: "ARRAY",
         items: {

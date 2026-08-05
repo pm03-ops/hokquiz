@@ -177,8 +177,8 @@ function viewQuizEditor(){
     <div class="k-correcthint">點右側 ⭘ 圈選哪一個是<b>正確答案</b>（目前：答案 ${Sa.k.correctIdx+1}）。作答時選項順序會自動隨機。</div>
     <button class="btn amber block" style="margin-top:10px" onclick="genKahootAI()">🤖 AI 依正解生成其餘 3 個錯誤答案</button>
 
-    <label class="fld">📇 字卡完整答案（字卡背面顯示 · 用完整句子說明正解，比選項更完整）</label>
-    <textarea placeholder="用一句完整的話說明正解，例如：成人 CPR 胸外按壓深度應至少 5 公分、不超過 6 公分…" oninput="Sa.k.flashAnswer=this.value">${esc(Sa.k.flashAnswer)}</textarea>
+    <label class="fld">📇 字卡完整答案／課本標題（需可獨立閱讀 · 含主題，例：成人 CPR 胸外按壓深度應至少 5 公分）</label>
+    <textarea placeholder="用一句可獨立閱讀的完整敘述，含主題，例如：成人 CPR 胸外按壓深度應至少 5 公分、不超過 6 公分" oninput="Sa.k.flashAnswer=this.value">${esc(Sa.k.flashAnswer)}</textarea>
     <button class="btn sec block" style="margin-top:8px" onclick="genFlashKahoot()">🤖 AI 生成字卡完整答案（依正解）</button>
 
     <label class="fld">📇 字卡詳細解說（先學用 · 越完整越好）</label>
