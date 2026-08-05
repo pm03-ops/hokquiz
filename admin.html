@@ -23,7 +23,7 @@
    僅限管理員（role=admin）。非管理員一律導回前台登入。
    ===================================================================== */
 
-const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', impN:5, drafts:[], draftQuiz:null };
+const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', impN:'auto', drafts:[], draftQuiz:null };
 function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'', quizNote:'', flashAnswer:'' }; }
 resetK();
 const root=()=>document.getElementById('root');
@@ -342,7 +342,7 @@ function viewImport(){
     <textarea id="imp_text" style="min-height:140px" placeholder="貼上教材文字…（例如：洗手五時機為接觸病人前、清潔前…）" oninput="Sa.material=this.value">${esc(Sa.material)}</textarea>
     <div class="inline" style="margin-top:12px;align-items:center">
       <label class="fld" style="margin:0">生成題數</label>
-      <select onchange="Sa.impN=+this.value" style="width:auto">${[3,5,8,10].map(n=>`<option ${Sa.impN===n?'selected':''}>${n}</option>`).join('')}</select>
+      <select onchange="Sa.impN=(this.value==='auto'?'auto':+this.value)" style="width:auto"><option value="auto" ${Sa.impN==='auto'?'selected':''}>🤖 自動判斷</option>${[3,5,8,10].map(n=>`<option value="${n}" ${Sa.impN===n?'selected':''}>${n} 題</option>`).join('')}</select>
       <button class="btn amber" style="flex:1" onclick="genFromMaterial()">🤖 產生題目草稿</button>
     </div>
   </div>

@@ -107,10 +107,14 @@ Deno.serve(async (req: Request) => {
 
     if (action === "questions") {
       const text = String(body.text || "");
-      const n = Math.min(20, Math.max(1, Number(body.n) || 5));
+      const auto = body.n === "auto" || body.n === 0 || body.n == null;
+      const n = auto ? 0 : Math.min(20, Math.max(1, Number(body.n) || 5));
       if (text.trim().length < 10) return json({ error: "教材內容太短" });
+      const countInstr = auto
+        ? "請你依教材的內容量與重點多寡，自行判斷「適合的題數」（約 3–15 題；重點多就多出、少就少出，不要硬湊或重複）。"
+        : `請出「${n}」題。`;
       const prompt =
-        `你是護理與長照教育的出題助手。根據以下教材，出「${n}」題繁體中文單選題。每題需包含：\n- stem：題幹\n- correct：簡短的正確選項（幾個字或一個詞組，用於測驗選項）\n- distractors：3 個合理但明確錯誤的簡短干擾選項（長度與 correct 相近）\n- flash_answer：一句「可獨立閱讀的完整敘述」，同時當作課本重點的標題。必須包含主題／主詞，讓人不看題目也能理解（例如寫「成人 CPR 胸外按壓深度應至少 5 公分」，而非只寫「至少 5 公分」）\n- explain：3–5 句教學解說，說明正解觀念與一個容易混淆或常犯的重點，讓學員光看解說也能學會\n內容必須與教材與本題緊密相符。\n教材內容：\n${text.slice(0, 8000)}`;
+        `你是護理與長照教育的出題助手。根據以下教材出繁體中文單選題。${countInstr}每題需包含：\n- stem：題幹\n- correct：簡短的正確選項（幾個字或一個詞組，用於測驗選項）\n- distractors：3 個合理但明確錯誤的簡短干擾選項（長度與 correct 相近）\n- flash_answer：一句「可獨立閱讀的完整敘述」，同時當作課本重點的標題。必須包含主題／主詞，讓人不看題目也能理解（例如寫「成人 CPR 胸外按壓深度應至少 5 公分」，而非只寫「至少 5 公分」）\n- explain：3–5 句教學解說，說明正解觀念與一個容易混淆或常犯的重點，讓學員光看解說也能學會\n內容必須與教材與本題緊密相符。\n教材內容：\n${text.slice(0, 8000)}`;
       const questionSchema = {
         type: "ARRAY",
         items: {
@@ -127,7 +131,7 @@ Deno.serve(async (req: Request) => {
       };
       const arr = parseJsonLoose(await gemini(prompt, { schema: questionSchema }));
       if (!Array.isArray(arr) || !arr.length) return json({ error: "AI 回傳格式異常，請再試一次" });
-      const out = arr.slice(0, n).map((d: Record<string, unknown>) => ({
+      const out = arr.slice(0, auto ? Math.min(arr.length, 20) : n).map((d: Record<string, unknown>) => ({
         stem: String(d.stem || ""),
         correct: String(d.correct || ""),
         distractors: (Array.isArray(d.distractors) ? d.distractors : []).slice(0, 3).map(String),
