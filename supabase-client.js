@@ -38,6 +38,29 @@ const Auth = {
     this._profile = null;
   },
 
+  /** 員工自行註冊：建立登入 + 自己的 profile（角色限職員，不能是 admin） */
+  async register(employeeId, name, role, password){
+    if(!['care','social','nurse'].includes(role)) throw new Error('角色不正確');
+    const email = empIdToEmail(employeeId);
+    const { data, error } = await sb.auth.signUp({ email, password });
+    if(error){
+      if(/already registered|already exists/i.test(error.message)) throw new Error('此員工編號已被註冊，請直接登入');
+      throw error;
+    }
+    let uid = data.user && data.user.id;
+    if(!uid){ const u = await sb.auth.getUser(); uid = u.data.user && u.data.user.id; }
+    if(!uid) throw new Error('註冊未完成，請重試或改用登入');
+    const { error: pErr } = await sb.from('profiles').insert({
+      id: uid, employee_id: String(employeeId).toUpperCase(), name, role, must_change_password: false,
+    });
+    if(pErr){
+      await sb.auth.signOut();
+      if(/duplicate|unique/i.test(pErr.message)) throw new Error('此員工編號已被註冊，請直接登入');
+      throw pErr;
+    }
+    return await this.loadProfile();
+  },
+
   /** 目前登入的 auth session（未登入回傳 null） */
   async session(){
     const { data } = await sb.auth.getSession();

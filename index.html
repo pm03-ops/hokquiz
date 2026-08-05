@@ -15,7 +15,7 @@
 <div id="toast-host"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-client.js?v=9"></script>
+<script src="supabase-client.js?v=13"></script>
 <script src="db.js?v=12"></script>
 <script>
 /* =====================================================================
@@ -63,7 +63,8 @@ function renderLogin(errMsg){
       <input id="lg_pw" type="password" placeholder="輸入密碼" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
       ${errMsg?`<div class="fb b" style="margin-top:12px">❌ ${esc(errMsg)}</div>`:''}
       <button class="btn block" style="margin-top:16px" id="lg_btn" onclick="doLogin()">登入</button>
-      <div class="note center" style="margin-top:14px">忘記密碼或需要帳號？請洽管理員。</div>
+      <button class="btn sec block" style="margin-top:10px" onclick="renderRegister()">📝 註冊新帳號</button>
+      <div class="note center" style="margin-top:12px">忘記密碼請洽管理員。</div>
     </div>
   </div></div>`;
   const el=document.getElementById('lg_id'); if(el) el.focus();
@@ -78,6 +79,52 @@ async function doLogin(){
     const msg = /Invalid login/i.test(e.message)?'員工編號或密碼錯誤':e.message;
     renderLogin(msg);
   }
+}
+
+/* =====================================================================
+   員工自行註冊
+   ===================================================================== */
+function renderRegister(){
+  root().innerHTML=`<div class="shell"><div class="auth">
+    <div class="auth-logo"><div class="mk">✚</div><div class="nm">照護<b>學堂</b></div>
+      <div class="tag2">註冊新帳號</div></div>
+    <div class="card">
+      <div class="card-h">📝 註冊</div>
+      <label class="fld">員工編號（H + 4 碼，例：H0123）</label>
+      <input id="rg_id" placeholder="H0123" maxlength="5" oninput="this.value=this.value.toUpperCase()">
+      <label class="fld">姓名</label>
+      <input id="rg_name" placeholder="輸入你的姓名">
+      <label class="fld">職類</label>
+      <div class="chips" id="rg_role">
+        ${ROLES.filter(r=>r.key!=='admin').map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="radio" name="rgrole" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
+      </div>
+      <label class="fld">設定密碼（至少 6 碼）</label>
+      <input id="rg_pw" type="password" placeholder="設定你的密碼">
+      <label class="fld">再次輸入密碼</label>
+      <input id="rg_pw2" type="password" placeholder="再次輸入" onkeydown="if(event.key==='Enter')doRegister()">
+      <div id="rg_msg"></div>
+      <button class="btn block" style="margin-top:16px" id="rg_btn" onclick="doRegister()">建立帳號</button>
+      <button class="btn ghost block" style="margin-top:8px" onclick="renderLogin()">← 返回登入</button>
+    </div>
+  </div></div>`;
+  document.querySelectorAll('#rg_role input').forEach(rb=>{ rb.onchange=()=>{
+    document.querySelectorAll('#rg_role .chip-ck').forEach(x=>x.classList.remove('sel'));
+    rb.closest('.chip-ck').classList.add('sel'); }; });
+}
+function rgMsg(m){ const el=document.getElementById('rg_msg'); if(el) el.innerHTML=`<div class="fb b" style="margin-top:12px">❌ ${esc(m)}</div>`; }
+async function doRegister(){
+  const id=(document.getElementById('rg_id').value||'').trim().toUpperCase();
+  const name=(document.getElementById('rg_name').value||'').trim();
+  const role=(document.querySelector('#rg_role input:checked')||{}).value;
+  const pw=document.getElementById('rg_pw').value||'', pw2=document.getElementById('rg_pw2').value||'';
+  if(!/^H\d{4}$/.test(id)) return rgMsg('員工編號須為 H + 4 碼數字（例：H0123）');
+  if(!name) return rgMsg('請輸入姓名');
+  if(!role) return rgMsg('請選擇職類');
+  if(pw.length<6) return rgMsg('密碼至少 6 碼');
+  if(pw!==pw2) return rgMsg('兩次輸入的密碼不一致');
+  const btn=document.getElementById('rg_btn'); btn.disabled=true; btn.textContent='建立中…';
+  try{ await Auth.register(id, name, role, pw); await route(); }
+  catch(e){ rgMsg(e.message); btn.disabled=false; btn.textContent='建立帳號'; }
 }
 
 /* =====================================================================
