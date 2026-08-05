@@ -16,7 +16,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-client.js?v=9"></script>
-<script src="db.js?v=11"></script>
+<script src="db.js?v=12"></script>
 <script>
 /* =====================================================================
    前台 index.html —— 員工登入 / 首頁 / 字卡 / 測驗 / 複習 / 排行
@@ -372,6 +372,7 @@ function nextQ(){ const P=S.play; if(P.idx<P.list.length-1){ P.idx++; P.answered
 async function finishQuiz(){
   const P=S.play;
   await Promise.allSettled(P.pending||[]);        // 確保背景作答都已送出記錄
+  try{ await DB.refreshReviews(); }catch(_){}      // 讓答錯的題目立即出現在複習清單/首頁待複習
   if(P.isReview){ toast(`複習完成！+${P.pointsEarned} 分`); go('home'); return; }
   try{ await DB.finish(P.sessionId, P.quizId); }catch(e){ /* 成績已於作答時逐題記錄，仍顯示結果 */ }
   renderResult();
@@ -402,6 +403,8 @@ function renderResult(){
    複習（SRS）—— 也走伺服器評分
    ===================================================================== */
 async function renderReview(){
+  root().innerHTML=shell('<div class="note center" style="padding:40px">載入複習…</div>','review');
+  try{ await DB.refreshReviews(); }catch(_){}
   const t=todayNum(), due=DB.dueReviews(t);
   if(!due.length){
     root().innerHTML=shell(`<div class="card center" style="padding:40px 22px">

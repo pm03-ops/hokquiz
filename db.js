@@ -111,6 +111,13 @@ const DB = {
     this.cache.cardReviews=map; return map;
   },
   cardReview(qid){ return this.cache.cardReviews[qid]||null; },
+
+  /** 重新載入測驗 SRS 複習清單（作答後、進入複習分頁時呼叫） */
+  async refreshReviews(){
+    const { data, error } = await sb.from('reviews').select('*').eq('user_id', this.me().id);
+    if(!error) this.cache.reviews = data||[];
+    return this.cache.reviews;
+  },
   /** 評分一張字卡：known=true「熟悉」→ 間隔變長；false「需複習」→ 當天再現 */
   async rateCard(questionId, known){
     const uid=this.me().id, today=todayNum();

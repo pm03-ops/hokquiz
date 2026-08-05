@@ -80,10 +80,10 @@ Deno.serve(async (req: Request) => {
       if (answered >= 100) badges.push({ user_id: uid, badge_key: "century" });
       if (streak >= 7) badges.push({ user_id: uid, badge_key: "streak7" });
 
-      // SRS：熟練度上下調整
+      // SRS：答對 → 熟練度上升、間隔拉長；答錯 → 重置並「當天」排入複習
       const curLevel = revRes.data ? revRes.data.level : 0;
-      const level = correct ? Math.min(curLevel + 1, SRS_INTERVALS.length - 1) : Math.max(curLevel - 1, 1);
-      const due = today + SRS_INTERVALS[level];
+      const level = correct ? Math.min(curLevel + 1, SRS_INTERVALS.length - 1) : 0;
+      const due = correct ? today + SRS_INTERVALS[level] : today;
 
       // 並行寫入
       await Promise.all([
