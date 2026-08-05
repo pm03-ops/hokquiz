@@ -452,6 +452,12 @@ function viewSettings(){
     <div id="ai_test_result" style="margin-top:12px"></div>
   </div>
   <div class="card" style="margin-top:12px">
+    <div class="card-h">🪄 批次補上「字卡完整答案／課本標題」</div>
+    <div class="note" style="margin:0 0 12px">幫所有<b>缺少字卡完整答案</b>的題目，用 AI 依題目與正解生成可獨立閱讀的完整敘述（課本的標題會更完整）。舊題目建議跑一次。</div>
+    <button class="btn amber block" onclick="fillMissingFlash(this)">開始批次補上</button>
+    <div id="fill_result" style="margin-top:12px"></div>
+  </div>
+  <div class="card" style="margin-top:12px">
     <div class="card-h">設定步驟</div>
     <ol class="note" style="margin:0;padding-left:18px;line-height:2">
       <li>Supabase → <b>Edge Functions</b> → 部署名為 <code>ai-generate</code> 的函式。</li>
@@ -459,6 +465,22 @@ function viewSettings(){
       <li>（選用）<code>GEMINI_MODEL</code> 指定模型，預設 <code>gemini-3.5-flash</code>。</li>
     </ol>
   </div>`;
+}
+async function fillMissingFlash(btn){
+  const box=document.getElementById('fill_result');
+  await DB.loadForAdmin();
+  const qs=DB.cache.allQuestions.filter(q=>!q.flash_answer||!q.flash_answer.trim());
+  if(!qs.length){ box.innerHTML='<div class="fb g">✅ 所有題目都已有字卡完整答案</div>'; return; }
+  if(!confirm(`要用 AI 幫 ${qs.length} 題缺少字卡完整答案的題目補上嗎？（可能需一點時間）`)) return;
+  const orig=btn.textContent; btn.disabled=true;
+  let done=0, fail=0;
+  for(const q of qs){
+    btn.textContent=`處理中… ${done+fail+1}/${qs.length}`;
+    try{ const fa=await aiFlashAnswer(q.stem, q.correct); await DB.updateQuestion(q.id,{flash_answer:fa}); done++; }
+    catch(e){ fail++; }
+  }
+  box.innerHTML=`<div class="fb ${fail?'b':'g'}">已補上 ${done}/${qs.length} 題${fail?`（${fail} 題失敗，可再按一次）`:''}</div>`;
+  btn.disabled=false; btn.textContent=orig; toast('完成');
 }
 async function testAi(btn){
   const box=document.getElementById('ai_test_result');
