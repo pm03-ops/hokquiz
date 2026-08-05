@@ -332,7 +332,7 @@ async function startQuiz(quizId){
     const qs=await DB.ensureQuizQuestions(quizId);
     if(!qs.length){ toast('這份測驗還沒有題目'); return; }
     S.play={ quizId, sessionId:newSessionId(), title:(DB.quiz(quizId)||{}).title||'測驗',
-      list:shuffle(qs), idx:0, answered:false, correctCount:0, pointsEarned:0 };
+      list:shuffle(qs), idx:0, answered:false, correctCount:0, pointsEarned:0, pending:[] };
     S.view='quizzes'; renderPlay();
   }catch(e){ toast('載入失敗：'+e.message); }
 }
@@ -348,36 +348,30 @@ function renderPlay(){
     <div id="fb"></div>
   `,'quizzes');
 }
-async function answerQuiz(btn, chosen){
+function answerQuiz(btn, chosen){
   const P=S.play; if(P.answered) return; P.answered=true;
-  document.querySelectorAll('#opts .opt').forEach(b=>b.disabled=true);
-  document.getElementById('fb').innerHTML='<div class="note center">評分中…</div>';
-  const cur=P.list[P.idx];
-  try{
-    const res=await DB.grade(P.sessionId, P.quizId, cur.id, chosen);
-    DB.applyGradeResult(P.quizId, cur.id, res);
-    if(res.correct){ P.correctCount++; P.pointsEarned+=(res.gained||0); }
-    document.querySelectorAll('#opts .opt').forEach(b=>{
-      const txt=b.querySelector('span:last-child').textContent;
-      if(txt===res.correctAnswer) b.classList.add('correct');
-      else if(txt===chosen) b.classList.add('wrong');
-    });
-    document.getElementById('fb').innerHTML=`
-      <div class="fb ${res.correct?'g':'b'}">
-        <div class="h">${res.correct?`✅ 答對了！ +${res.gained||0} 分`:'❌ 答錯了'}</div>
-        ${res.correct?'':`正確答案：<b>${esc(res.correctAnswer||'')}</b><br>`}${res.quizNote?'💡 '+esc(res.quizNote):''}
-      </div>
-      <button class="btn block" style="margin-top:14px" onclick="nextQ()">${P.idx===P.list.length-1?'看成績':'下一題'} →</button>`;
-    document.getElementById('fb').scrollIntoView({behavior:'smooth',block:'nearest'});
-  }catch(e){
-    P.answered=false;
-    document.querySelectorAll('#opts .opt').forEach(b=>b.disabled=false);
-    document.getElementById('fb').innerHTML=`<div class="fb b">❌ 評分失敗：${esc(e.message)}</div>`;
-  }
+  const cur=P.list[P.idx], u=me();
+  const correct = String(chosen) === String(cur.correct);         // 本機立即判斷
+  const gained = correct ? (10 + Math.min(u.streak||0, 5)) : 0;
+  document.querySelectorAll('#opts .opt').forEach(b=>{ b.disabled=true;
+    const txt=b.querySelector('span:last-child').textContent;
+    if(txt===cur.correct) b.classList.add('correct');
+    else if(txt===chosen) b.classList.add('wrong'); });
+  if(correct){ P.correctCount++; P.pointsEarned+=gained; u.points+=gained; u.answered+=1; }
+  document.getElementById('fb').innerHTML=`
+    <div class="fb ${correct?'g':'b'}">
+      <div class="h">${correct?`✅ 答對了！ +${gained} 分`:'❌ 答錯了'}</div>
+      ${correct?'':`正確答案：<b>${esc(cur.correct)}</b><br>`}${cur.quiz_note?'💡 '+esc(cur.quiz_note):''}
+    </div>
+    <button class="btn block" style="margin-top:14px" onclick="nextQ()">${P.idx===P.list.length-1?'看成績':'下一題'} →</button>`;
+  document.getElementById('fb').scrollIntoView({behavior:'smooth',block:'nearest'});
+  // 背景送伺服器權威記錄（不阻塞畫面；成績仍以伺服器為準）
+  (P.pending=P.pending||[]).push(DB.grade(P.sessionId, P.quizId, cur.id, chosen).catch(()=>{}));
 }
 function nextQ(){ const P=S.play; if(P.idx<P.list.length-1){ P.idx++; P.answered=false; renderPlay(); } else finishQuiz(); }
 async function finishQuiz(){
   const P=S.play;
+  await Promise.allSettled(P.pending||[]);        // 確保背景作答都已送出記錄
   if(P.isReview){ toast(`複習完成！+${P.pointsEarned} 分`); go('home'); return; }
   try{ await DB.finish(P.sessionId, P.quizId); }catch(e){ /* 成績已於作答時逐題記錄，仍顯示結果 */ }
   renderResult();
@@ -422,7 +416,7 @@ async function renderReview(){
     const qs=await DB.questionsByIds(due.map(r=>r.question_id));
     if(!qs.length){ root().innerHTML=shell('<div class="empty">複習題目已不存在</div>','review'); return; }
     S.play={ quizId:'__review__', sessionId:newSessionId(), title:'🔁 今日複習',
-      list:qs, idx:0, answered:false, correctCount:0, pointsEarned:0, isReview:true };
+      list:qs, idx:0, answered:false, correctCount:0, pointsEarned:0, isReview:true, pending:[] };
     renderPlay();
   }catch(e){ root().innerHTML=shell(`<div class="empty">載入失敗：${esc(e.message)}</div>`,'review'); }
 }
