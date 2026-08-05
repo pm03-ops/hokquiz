@@ -16,7 +16,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-client.js?v=9"></script>
-<script src="db.js?v=10"></script>
+<script src="db.js?v=11"></script>
 <script>
 /* =====================================================================
    前台 index.html —— 員工登入 / 首頁 / 字卡 / 測驗 / 複習 / 排行
@@ -232,55 +232,84 @@ function renderTextbook(){
   root().innerHTML=shell(`
     <div class="crumb"><button class="back" onclick="go('learn')">← 學習</button>
       <span class="cur">📖 ${esc(quiz.title||'課本')}</span></div>
-    <div class="admin-hint">💡 課本模式：把每個重點與答案完整列出，讀熟後可用「字卡」複習，或直接去「測驗」。</div>
-    ${T.list.map((c,i)=>{ const answer=(c.flash_answer&&c.flash_answer.trim())?c.flash_answer:c.correct;
+    <div class="admin-hint">💡 課本：把單元重點整理成內容供閱讀，讀熟後可用「字卡」複習。</div>
+    ${T.list.map((c,i)=>{ const point=(c.flash_answer&&c.flash_answer.trim())?c.flash_answer:c.correct;
       return `<div class="card" style="margin-bottom:12px">
         <div class="cap" style="${cap}">重點 ${i+1}</div>
-        <div style="font-size:17px;font-weight:800;line-height:1.5;margin:6px 0 12px">${esc(c.stem)}</div>
-        <div class="cap" style="${cap}">✅ 答案</div>
-        <div class="fb g" style="text-align:left;margin:6px 0 12px;font-weight:700;line-height:1.6">${esc(answer)}</div>
-        ${c.explain?`<div class="cap" style="${cap}">📖 說明</div>
-          <div class="fb g" style="text-align:left;margin-top:6px">${esc(c.explain)}</div>`:''}
+        <div style="font-size:17px;font-weight:800;line-height:1.6;margin:8px 0 ${c.explain?'10px':'0'}">${esc(point)}</div>
+        ${c.explain?`<div style="line-height:1.85">${esc(c.explain)}</div>`:''}
       </div>`; }).join('')}
     <button class="btn block" style="margin-top:6px" onclick="openFlash('${T.quizId}')">📇 用字卡複習這個單元 →</button>
   `,'learn');
 }
+/* 字卡（Anki 式間隔複習）：到期的卡隨機出現，自評熟悉/需複習 */
 async function openFlash(quizId){
   try{
     const cards=await DB.ensureFlash(quizId);
     if(!cards.length){ toast('這份測驗還沒有題目'); return; }
-    S.flash={ quizId, idx:0, list:cards, reveal:false }; S.view='learn'; renderFlashCard();
+    await DB.loadCardReviews(cards.map(c=>c.id));
+    const today=todayNum();
+    let due=cards.filter(c=>{ const r=DB.cardReview(c.id); return !r || r.due<=today; });
+    const reviewingAll=!due.length;
+    if(reviewingAll) due=cards;                       // 沒有到期的卡就全部複習一輪
+    S.flash={ quizId, queue:shuffle(due), pos:0, reveal:false, known:0, total:due.length, reviewingAll };
+    S.view='learn'; renderFlashCard();
   }catch(e){ toast('載入失敗：'+e.message); }
 }
 function renderFlashCard(){
-  const F=S.flash, c=F.list[F.idx], quiz=DB.quiz(F.quizId)||{};
+  const F=S.flash;
+  if(F.pos>=F.queue.length){ renderFlashDone(); return; }
+  const c=F.queue[F.pos], quiz=DB.quiz(F.quizId)||{};
   const cap='font-size:12px;font-weight:800;letter-spacing:1.5px;color:var(--muted)';
-  const answer=(c.flash_answer && c.flash_answer.trim()) ? c.flash_answer : c.correct;   // 舊題無 flash_answer 時退回簡短正解
+  const answer=(c.flash_answer && c.flash_answer.trim()) ? c.flash_answer : c.correct;   // 舊題退回簡短正解
   root().innerHTML=shell(`
-    <div class="qhead"><span>📇 ${esc(quiz.title||'字卡')}</span><span>${F.idx+1} / ${F.list.length}</span></div>
-    <div class="bar"><i style="width:${(F.idx+1)/F.list.length*100}%"></i></div>
-    <div class="card" style="padding:26px 22px;min-height:200px">
-      <div class="cap" style="${cap}">${F.reveal?'🔄 背面 · 解答':'題目'}</div>
+    <div class="crumb"><button class="back" onclick="go('learn')">← 返回</button>
+      <span class="cur">📇 ${esc(quiz.title||'字卡')}${F.reviewingAll?'（全部複習）':''}</span>
+      <span class="tags"><span class="tag teal">已熟悉 ${F.known}/${F.total}</span></span></div>
+    <div class="bar"><i style="width:${F.total?F.known/F.total*100:0}%"></i></div>
+    <div class="card" style="padding:26px 22px;min-height:210px">
+      <div class="cap" style="${cap}">${F.reveal?'🔄 背面 · 答案':'正面 · 題目'}</div>
       <div style="font-size:20px;font-weight:800;line-height:1.5;margin:10px 0 4px">${esc(c.stem)}</div>
       ${F.reveal? `
         <div class="cap" style="${cap};margin-top:22px">✅ 答案</div>
         <div class="fb g" style="text-align:left;margin-top:8px;font-size:16px;font-weight:700;line-height:1.6">${esc(answer)}</div>
         ${c.explain? `<div class="cap" style="${cap};margin-top:16px">📖 說明</div>
           <div class="fb g" style="text-align:left;margin-top:8px">${esc(c.explain)}</div>`:''}
+        <button class="btn ghost block" style="margin-top:14px" onclick="flashHide()">🙈 翻回正面（隱藏答案）</button>
+        <div class="inline" style="margin-top:10px">
+          <button class="btn amber" style="flex:1" onclick="rateFlash(false)">🔁 需複習</button>
+          <button class="btn" style="flex:1" onclick="rateFlash(true)">✅ 熟悉</button>
+        </div>
       ` : `<div class="note center" style="margin-top:26px">先想想答案，再翻到背面對照</div>
            <button class="btn block" style="margin-top:12px" onclick="flashReveal()">🔄 翻到背面看答案</button>`}
     </div>
-    <div class="inline" style="margin-top:16px">
-      <button class="btn sec" style="flex:1" onclick="flashPrev()" ${F.idx?'':'disabled'}>上一張</button>
-      ${F.idx===F.list.length-1
-        ? `<button class="btn" style="flex:2" onclick="go('learn')">完成 ✓</button>`
-        : `<button class="btn" style="flex:2" onclick="flashNext()">下一張 →</button>`}
-    </div>
+    <div class="note center" style="margin-top:12px">本輪剩餘 ${F.queue.length-F.pos} 張</div>
   `,'learn');
 }
 function flashReveal(){ S.flash.reveal=true; renderFlashCard(); }
-function flashNext(){ if(S.flash.idx<S.flash.list.length-1){ S.flash.idx++; S.flash.reveal=false; renderFlashCard(); } }
-function flashPrev(){ if(S.flash.idx>0){ S.flash.idx--; S.flash.reveal=false; renderFlashCard(); } }
+function flashHide(){ S.flash.reveal=false; renderFlashCard(); }
+async function rateFlash(known){
+  const F=S.flash, c=F.queue[F.pos];
+  try{ await DB.rateCard(c.id, known); }catch(e){ toast('儲存失敗：'+e.message); }
+  if(known) F.known++;
+  else F.queue.push(c);                 // 需複習：本輪稍後再出現一次
+  F.pos++; F.reveal=false;
+  renderFlashCard();
+}
+function renderFlashDone(){
+  const F=S.flash;
+  root().innerHTML=shell(`
+    <div class="card center" style="padding:34px 22px">
+      <div class="big-emoji">🎉</div>
+      <h3 style="font-size:20px;font-weight:900;margin:12px 0 4px">這輪字卡複習完成！</h3>
+      <div class="note center">按「熟悉」的卡會隔更久才再出現（熟悉 2–3 次後就很少出現）；按「需複習」的卡會較快再遇到。每個帳號分開記錄。</div>
+      <div class="inline" style="margin-top:20px">
+        <button class="btn sec" style="flex:1" onclick="openFlash('${F.quizId}')">再複習一輪</button>
+        <button class="btn" style="flex:1" onclick="go('learn')">回學習</button>
+      </div>
+    </div>
+  `,'learn');
+}
 
 /* =====================================================================
    測驗列表

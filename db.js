@@ -17,8 +17,10 @@ const ROLES = [
 const roleOf   = k => ROLES.find(r=>r.key===k) || {name:k,color:'#888',emoji:'👤'};
 const roleName = k => roleOf(k).name;
 
-/* SRS 間隔（天） */
+/* SRS 間隔（天）—— 測驗複習用 */
 const SRS_INTERVALS = [0, 1, 3, 7, 14, 30, 90];
+/* 字卡間隔（天）—— Anki 式：按「熟悉」逐級變長，2–3 次後就很少再出現 */
+const FLASH_INTERVALS = [0, 1, 2, 4, 8, 15, 30, 60];
 
 /* =====================================================================
    共用工具（與舊版相容）
@@ -44,7 +46,8 @@ const DB = {
     quizzes:[], badgeDefs:[], userBadges:[],
     answers:[], reviews:[], leaderboard:[],
     quizQuestions:{},   // quizId -> [{id,stem,options}]（作答用，無正解）
-    flash:{},           // quizId -> [{id,stem,correct,explain}]（字卡用）
+    flash:{},           // quizId -> [{id,stem,correct,flash_answer,explain}]（字卡用）
+    cardReviews:{},     // questionId -> {level,due,reps}（本人字卡複習進度）
     allQuestions:[],    // 後台用：完整題目（含正解 correct/distractors/explain/quiz_note）
   },
 
@@ -96,6 +99,31 @@ const DB = {
     if(error) throw error;
     this.cache.flash[quizId] = data||[];
     return this.cache.flash[quizId];
+  },
+
+  /* ---------- 字卡間隔複習（每帳號分開，RLS 保護） ---------- */
+  async loadCardReviews(questionIds){
+    if(!questionIds||!questionIds.length){ this.cache.cardReviews={}; return {}; }
+    const { data, error } = await sb.from('card_reviews').select('*')
+      .eq('user_id', this.me().id).in('question_id', questionIds);
+    if(error) throw error;
+    const map={}; (data||[]).forEach(r=>map[r.question_id]={level:r.level, due:r.due, reps:r.reps});
+    this.cache.cardReviews=map; return map;
+  },
+  cardReview(qid){ return this.cache.cardReviews[qid]||null; },
+  /** 評分一張字卡：known=true「熟悉」→ 間隔變長；false「需複習」→ 當天再現 */
+  async rateCard(questionId, known){
+    const uid=this.me().id, today=todayNum();
+    const r=this.cache.cardReviews[questionId]||{level:0, reps:0};
+    let level, reps;
+    if(known){ level=Math.min((r.level||0)+1, FLASH_INTERVALS.length-1); reps=(r.reps||0)+1; }
+    else { level=Math.max(0,(r.level||0)-1); reps=0; }
+    const due = known ? today+FLASH_INTERVALS[level] : today;
+    const row={ user_id:uid, question_id:questionId, level, due, reps, updated_at:new Date().toISOString() };
+    const { error } = await sb.from('card_reviews').upsert(row, { onConflict:'user_id,question_id' });
+    if(error) throw error;
+    this.cache.cardReviews[questionId]={level, due, reps};
+    return { level, due, reps, known };
   },
 
   /* ---------- 同步存取器（給 render 用） ---------- */
