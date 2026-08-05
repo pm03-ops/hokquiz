@@ -23,7 +23,7 @@
    資料來自 Supabase（db.js / Auth）。
    ===================================================================== */
 
-const S = { view:'home', play:null, flash:null };
+const S = { view:'home', play:null, flash:null, study:null };
 const root=()=>document.getElementById('root');
 const me =()=>DB.me();
 
@@ -132,12 +132,12 @@ function renderAdminLanding(){
    員工介面殼
    ===================================================================== */
 function render(){
-  ({home:renderHome, flash:renderFlashList, quizzes:renderQuizList,
+  ({home:renderHome, learn:renderLearn, quizzes:renderQuizList,
     review:renderReview, leaderboard:renderLeaderboard }[S.view]||renderHome)();
 }
 function shell(inner, tab){
   const u=me(), r=roleOf(u.role);
-  const tabs=[{k:'home',e:'🏠',n:'首頁'},{k:'flash',e:'📇',n:'字卡'},{k:'quizzes',e:'📝',n:'測驗'},{k:'review',e:'🔁',n:'複習'},{k:'leaderboard',e:'🏆',n:'排行'}];
+  const tabs=[{k:'home',e:'🏠',n:'首頁'},{k:'learn',e:'📚',n:'學習'},{k:'quizzes',e:'📝',n:'測驗'},{k:'review',e:'🔁',n:'複習'},{k:'leaderboard',e:'🏆',n:'排行'}];
   return `<div class="shell">
     <div class="topbar">
       <div class="brand"><span class="mark">✚</span>照護<b>學堂</b></div>
@@ -191,7 +191,7 @@ function quizRow(q, showFlash){
       <div class="tags">${(q.roles||[]).map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</div>
     </div>
     <div class="rowbtns">
-      ${showFlash?`<button class="btn sec sm" onclick="openFlash('${q.id}')">字卡</button>`:''}
+      ${showFlash?`<button class="btn sec sm" onclick="openTextbook('${q.id}')">學習</button>`:''}
       <button class="btn sm" onclick="startQuiz('${q.id}')">測驗</button>
     </div>
   </div>`;
@@ -200,25 +200,56 @@ function quizRow(q, showFlash){
 /* =====================================================================
    字卡（先學）—— 獨立區：顯示題目 + 正解 + 詳細解說
    ===================================================================== */
-function renderFlashList(){
+function renderLearn(){
   const quizzes=DB.quizzesFor(me().role);
   root().innerHTML=shell(`
-    <div class="sect">📇 學習字卡</div>
-    <div class="admin-hint">💡 字卡是「先學」：直接看題目、正確答案與完整解說，讀熟了再去「測驗」自我檢測。</div>
+    <div class="sect">📚 學習</div>
+    <div class="admin-hint">💡 兩種學習方式：<b>📖 課本</b>把重點與答案完整列出讓你先讀熟；<b>📇 字卡</b>正面題目、翻面看答案，用來複習與自我檢測。</div>
     <div class="card">
       ${quizzes.length? quizzes.map(q=>`<div class="row-item">
         <div class="thumb">${q.emoji||'📘'}</div>
         <div class="row-body"><div class="t">${esc(q.title)}</div><div class="s">${esc(q.descr||'')}</div></div>
-        <button class="btn sm" onclick="openFlash('${q.id}')">讀字卡 →</button>
+        <div class="rowbtns">
+          <button class="btn sec sm" onclick="openTextbook('${q.id}')">📖 課本</button>
+          <button class="btn sm" onclick="openFlash('${q.id}')">📇 字卡</button>
+        </div>
       </div>`).join('') : '<div class="empty"><span class="e">📭</span>目前沒有開放的測驗</div>'}
     </div>
-  `,'flash');
+  `,'learn');
+}
+
+/* 課本模式：把重點正面表列讓人讀 */
+async function openTextbook(quizId){
+  try{
+    const cards=await DB.ensureFlash(quizId);
+    if(!cards.length){ toast('這份測驗還沒有題目'); return; }
+    S.study={ quizId, list:cards }; S.view='learn'; renderTextbook();
+  }catch(e){ toast('載入失敗：'+e.message); }
+}
+function renderTextbook(){
+  const T=S.study, quiz=DB.quiz(T.quizId)||{};
+  const cap='font-size:12px;font-weight:800;letter-spacing:1.5px;color:var(--muted)';
+  root().innerHTML=shell(`
+    <div class="crumb"><button class="back" onclick="go('learn')">← 學習</button>
+      <span class="cur">📖 ${esc(quiz.title||'課本')}</span></div>
+    <div class="admin-hint">💡 課本模式：把每個重點與答案完整列出，讀熟後可用「字卡」複習，或直接去「測驗」。</div>
+    ${T.list.map((c,i)=>{ const answer=(c.flash_answer&&c.flash_answer.trim())?c.flash_answer:c.correct;
+      return `<div class="card" style="margin-bottom:12px">
+        <div class="cap" style="${cap}">重點 ${i+1}</div>
+        <div style="font-size:17px;font-weight:800;line-height:1.5;margin:6px 0 12px">${esc(c.stem)}</div>
+        <div class="cap" style="${cap}">✅ 答案</div>
+        <div class="fb g" style="text-align:left;margin:6px 0 12px;font-weight:700;line-height:1.6">${esc(answer)}</div>
+        ${c.explain?`<div class="cap" style="${cap}">📖 說明</div>
+          <div class="fb g" style="text-align:left;margin-top:6px">${esc(c.explain)}</div>`:''}
+      </div>`; }).join('')}
+    <button class="btn block" style="margin-top:6px" onclick="openFlash('${T.quizId}')">📇 用字卡複習這個單元 →</button>
+  `,'learn');
 }
 async function openFlash(quizId){
   try{
     const cards=await DB.ensureFlash(quizId);
     if(!cards.length){ toast('這份測驗還沒有題目'); return; }
-    S.flash={ quizId, idx:0, list:cards, reveal:false }; S.view='flash'; renderFlashCard();
+    S.flash={ quizId, idx:0, list:cards, reveal:false }; S.view='learn'; renderFlashCard();
   }catch(e){ toast('載入失敗：'+e.message); }
 }
 function renderFlashCard(){
@@ -242,10 +273,10 @@ function renderFlashCard(){
     <div class="inline" style="margin-top:16px">
       <button class="btn sec" style="flex:1" onclick="flashPrev()" ${F.idx?'':'disabled'}>上一張</button>
       ${F.idx===F.list.length-1
-        ? `<button class="btn" style="flex:2" onclick="go('flash')">完成 ✓</button>`
+        ? `<button class="btn" style="flex:2" onclick="go('learn')">完成 ✓</button>`
         : `<button class="btn" style="flex:2" onclick="flashNext()">下一張 →</button>`}
     </div>
-  `,'flash');
+  `,'learn');
 }
 function flashReveal(){ S.flash.reveal=true; renderFlashCard(); }
 function flashNext(){ if(S.flash.idx<S.flash.list.length-1){ S.flash.idx++; S.flash.reveal=false; renderFlashCard(); } }
