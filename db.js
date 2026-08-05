@@ -165,9 +165,9 @@ const DB = {
     this.cache.quizzes = this.cache.quizzes.filter(q=>q.id!==id);
     this.cache.allQuestions = this.cache.allQuestions.filter(q=>q.quiz_id!==id);
   },
-  async addQuestion({quiz_id, stem, correct, distractors, explain, quiz_note}){
+  async addQuestion({quiz_id, stem, correct, distractors, explain, quiz_note, flash_answer}){
     const { data, error } = await sb.from('questions')
-      .insert({quiz_id, stem, correct, distractors, explain:explain||'', quiz_note:quiz_note||''}).select().single();
+      .insert({quiz_id, stem, correct, distractors, explain:explain||'', quiz_note:quiz_note||'', flash_answer:flash_answer||''}).select().single();
     if(error) throw error; this.cache.allQuestions.push(data); return data;
   },
   async updateQuestion(id, patch){
@@ -216,6 +216,7 @@ async function adminUsers(action, payload){
 }
 async function aiDistractors(stem, correct){ return (await aiInvoke('distractors', {stem, correct})).distractors; }
 async function aiExplain(stem, correct, distractors){ return (await aiInvoke('explain', {stem, correct, distractors})).explain; }
+async function aiFlashAnswer(stem, correct){ return (await aiInvoke('flash', {stem, correct})).flashAnswer; }
 async function aiQuestionsFromText(text, n){ return (await aiInvoke('questions', {text, n})).questions; }
 
 /* =====================================================================

@@ -16,7 +16,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-client.js?v=9"></script>
-<script src="db.js?v=9"></script>
+<script src="db.js?v=10"></script>
 <script>
 /* =====================================================================
    後台 admin.html —— 題庫管理（測驗 / 題目 / 帳號 / AI）
@@ -24,7 +24,7 @@
    ===================================================================== */
 
 const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', impN:5, drafts:[], draftQuiz:null };
-function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'', quizNote:'' }; }
+function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'', quizNote:'', flashAnswer:'' }; }
 resetK();
 const root=()=>document.getElementById('root');
 
@@ -177,6 +177,10 @@ function viewQuizEditor(){
     <div class="k-correcthint">點右側 ⭘ 圈選哪一個是<b>正確答案</b>（目前：答案 ${Sa.k.correctIdx+1}）。作答時選項順序會自動隨機。</div>
     <button class="btn amber block" style="margin-top:10px" onclick="genKahootAI()">🤖 AI 依正解生成其餘 3 個錯誤答案</button>
 
+    <label class="fld">📇 字卡完整答案（字卡背面顯示 · 用完整句子說明正解，比選項更完整）</label>
+    <textarea placeholder="用一句完整的話說明正解，例如：成人 CPR 胸外按壓深度應至少 5 公分、不超過 6 公分…" oninput="Sa.k.flashAnswer=this.value">${esc(Sa.k.flashAnswer)}</textarea>
+    <button class="btn sec block" style="margin-top:8px" onclick="genFlashKahoot()">🤖 AI 生成字卡完整答案（依正解）</button>
+
     <label class="fld">📇 字卡詳細解說（先學用 · 越完整越好）</label>
     <textarea placeholder="完整說明正確答案的觀念、原理、易混淆重點…（字卡區會顯示這段）" oninput="Sa.k.explain=this.value">${esc(Sa.k.explain)}</textarea>
     <button class="btn sec block" style="margin-top:8px" onclick="genExplainKahoot()">🤖 AI 生成字卡詳細解說（依本題內容）</button>
@@ -207,7 +211,7 @@ function viewQuizEditor(){
 function setCorrect(i){ Sa.k.correctIdx=i; render(); }
 function editQuestion(id){
   const q=DB.question(id); if(!q) return;
-  Sa.k={ qid:q.id, stem:q.stem, answers:[q.correct, ...(q.distractors||[])].slice(0,4), correctIdx:0, explain:q.explain||'', quizNote:q.quiz_note||'' };
+  Sa.k={ qid:q.id, stem:q.stem, answers:[q.correct, ...(q.distractors||[])].slice(0,4), correctIdx:0, explain:q.explain||'', quizNote:q.quiz_note||'', flashAnswer:q.flash_answer||'' };
   window.scrollTo(0,0); render();
 }
 function cancelEdit(){ resetK(); render(); }
@@ -218,7 +222,7 @@ async function saveKahoot(){
   if(!stem){ toast('請輸入題目'); return; }
   if(!correct){ toast(`請填寫「答案 ${ci+1}」（目前圈選的正解格是空的）`); return; }
   if(distractors.some(x=>!x)){ toast('4 個答案格都要填寫'); return; }
-  const payload={ stem, correct, distractors, explain:(Sa.k.explain||'').trim(), quiz_note:(Sa.k.quizNote||'').trim() };
+  const payload={ stem, correct, distractors, explain:(Sa.k.explain||'').trim(), quiz_note:(Sa.k.quizNote||'').trim(), flash_answer:(Sa.k.flashAnswer||'').trim() };
   try{
     if(Sa.k.qid){ await DB.updateQuestion(Sa.k.qid, payload); toast('題目已更新'); }
     else { await DB.addQuestion({ quiz_id:Sa.editQuiz, ...payload }); toast('題目已加入'); }
@@ -316,6 +320,13 @@ async function genExplainKahoot(){
     render(); toast('已生成教學解說，可再修改');
   }catch(e){ toast('❌ '+e.message.slice(0,100)); }
 }
+async function genFlashKahoot(){
+  const ci=Sa.k.correctIdx, correct=(Sa.k.answers[ci]||'').trim(), stem=(Sa.k.stem||'').trim();
+  if(!correct){ toast('請先填正解那一格並圈選'); return; }
+  toast('🤖 生成字卡完整答案中…');
+  try{ Sa.k.flashAnswer=await aiFlashAnswer(stem, correct); render(); toast('已生成，可再修改'); }
+  catch(e){ toast('❌ '+e.message.slice(0,100)); }
+}
 
 /* =====================================================================
    AI 匯入出題
@@ -383,6 +394,8 @@ function draftCard(d,i){
       <input value="${esc(d.distractors[1]||'')}" oninput="Sa.drafts[${i}].distractors[1]=this.value" style="flex:1;min-width:100px">
       <input value="${esc(d.distractors[2]||'')}" oninput="Sa.drafts[${i}].distractors[2]=this.value" style="flex:1;min-width:100px">
     </div>
+    <label class="fld">📇 字卡完整答案（完整句子）</label>
+    <textarea oninput="Sa.drafts[${i}].flash_answer=this.value">${esc(d.flash_answer||'')}</textarea>
     <label class="fld">📇 字卡詳細解說</label>
     <textarea oninput="Sa.drafts[${i}].explain=this.value">${esc(d.explain||'')}</textarea>
     <button class="btn sec block" style="margin-top:8px" onclick="genDraftExplain(${i})">🤖 生成教學解說（依本題內容）</button>
@@ -407,7 +420,7 @@ async function addDraft(i){
   if(!_draftValid(d)){ toast('題幹、正解與 3 個干擾項為必填'); return; }
   try{
     await DB.addQuestion({ quiz_id, stem:d.stem.trim(), correct:d.correct.trim(),
-      distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim(), quiz_note:'' });
+      distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim(), quiz_note:'', flash_answer:(d.flash_answer||'').trim() });
     Sa.drafts.splice(i,1); toast('已加入題庫'); render();
   }catch(e){ toast('加入失敗：'+e.message); }
 }
@@ -418,7 +431,7 @@ async function addAllDrafts(){
   for(const d of Sa.drafts){
     if(_draftValid(d)){
       try{ await DB.addQuestion({ quiz_id, stem:d.stem.trim(), correct:d.correct.trim(),
-        distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim(), quiz_note:'' }); added++; }
+        distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim(), quiz_note:'', flash_answer:(d.flash_answer||'').trim() }); added++; }
       catch(e){ keep.push(d); }
     } else keep.push(d);
   }

@@ -96,12 +96,21 @@ Deno.serve(async (req: Request) => {
       return json({ explain: t.replace(/^["「『]|["」』]$/g, "").trim() });
     }
 
+    if (action === "flash") {
+      const stem = String(body.stem || ""), correct = String(body.correct || "");
+      if (!correct) return json({ error: "請先填正解" });
+      const prompt =
+        `你是護理與長照教育講師。針對以下題目與簡短正解，寫出「一句完整敘述」的答案，放在字卡背面用。要求：繁體中文、用完整句子清楚說明正解（比簡短正解更完整、更好懂）、1–2 句、不要列出其他選項、不要 JSON、不要引號。\n題幹：${stem}\n簡短正解：${correct}`;
+      const t = (await gemini(prompt, { json: false }) || "").trim();
+      return json({ flashAnswer: t.replace(/^["「『]|["」』]$/g, "").trim() });
+    }
+
     if (action === "questions") {
       const text = String(body.text || "");
       const n = Math.min(20, Math.max(1, Number(body.n) || 5));
       if (text.trim().length < 10) return json({ error: "教材內容太短" });
       const prompt =
-        `你是護理與長照教育的出題助手。根據以下教材，出「${n}」題繁體中文單選題。每題需有 1 個正確答案、3 個合理但錯誤的干擾選項，以及一段「教學解說」(explain)。\n教學解說要求：3–5 句、說明正確答案的觀念或原因、並提醒一個容易混淆或常犯的錯誤，讓學員光看解說也能學會，內容必須與本題緊密相符。\n教材內容：\n${text.slice(0, 8000)}`;
+        `你是護理與長照教育的出題助手。根據以下教材，出「${n}」題繁體中文單選題。每題需包含：\n- stem：題幹\n- correct：簡短的正確選項（幾個字或一個詞組，用於測驗選項）\n- distractors：3 個合理但明確錯誤的簡短干擾選項（長度與 correct 相近）\n- flash_answer：一句「完整敘述」的正確答案（放在字卡背面），用完整句子清楚說明正解，比 correct 更完整易懂\n- explain：3–5 句教學解說，說明正解觀念與一個容易混淆或常犯的重點，讓學員光看解說也能學會\n內容必須與教材與本題緊密相符。\n教材內容：\n${text.slice(0, 8000)}`;
       const questionSchema = {
         type: "ARRAY",
         items: {
@@ -110,9 +119,10 @@ Deno.serve(async (req: Request) => {
             stem: { type: "STRING" },
             correct: { type: "STRING" },
             distractors: { type: "ARRAY", items: { type: "STRING" } },
+            flash_answer: { type: "STRING" },
             explain: { type: "STRING" },
           },
-          required: ["stem", "correct", "distractors", "explain"],
+          required: ["stem", "correct", "distractors", "flash_answer", "explain"],
         },
       };
       const arr = parseJsonLoose(await gemini(prompt, { schema: questionSchema }));
@@ -121,6 +131,7 @@ Deno.serve(async (req: Request) => {
         stem: String(d.stem || ""),
         correct: String(d.correct || ""),
         distractors: (Array.isArray(d.distractors) ? d.distractors : []).slice(0, 3).map(String),
+        flash_answer: String(d.flash_answer || ""),
         explain: String(d.explain || ""),
       })).filter((d) => d.stem && d.correct);
       return json({ questions: out });

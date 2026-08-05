@@ -16,7 +16,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-client.js?v=9"></script>
-<script src="db.js?v=9"></script>
+<script src="db.js?v=10"></script>
 <script>
 /* =====================================================================
    前台 index.html —— 員工登入 / 首頁 / 字卡 / 測驗 / 複習 / 排行
@@ -218,29 +218,26 @@ async function openFlash(quizId){
   try{
     const cards=await DB.ensureFlash(quizId);
     if(!cards.length){ toast('這份測驗還沒有題目'); return; }
-    // 每張卡預先算好隨機選項順序（本次瀏覽固定），正解混在其中
-    const list=cards.map(c=>({ ...c, _opts: shuffle([c.correct, ...((c.distractors)||[])]) }));
-    S.flash={ quizId, idx:0, list, reveal:false }; S.view='flash'; renderFlashCard();
+    S.flash={ quizId, idx:0, list:cards, reveal:false }; S.view='flash'; renderFlashCard();
   }catch(e){ toast('載入失敗：'+e.message); }
 }
 function renderFlashCard(){
-  const F=S.flash, c=F.list[F.idx], quiz=DB.quiz(F.quizId)||{}, keys=['A','B','C','D','E','F'];
+  const F=S.flash, c=F.list[F.idx], quiz=DB.quiz(F.quizId)||{};
   const cap='font-size:12px;font-weight:800;letter-spacing:1.5px;color:var(--muted)';
+  const answer=(c.flash_answer && c.flash_answer.trim()) ? c.flash_answer : c.correct;   // 舊題無 flash_answer 時退回簡短正解
   root().innerHTML=shell(`
     <div class="qhead"><span>📇 ${esc(quiz.title||'字卡')}</span><span>${F.idx+1} / ${F.list.length}</span></div>
     <div class="bar"><i style="width:${(F.idx+1)/F.list.length*100}%"></i></div>
-    <div class="card" style="padding:22px">
-      <div class="cap" style="${cap}">題目</div>
-      <div style="font-size:20px;font-weight:800;line-height:1.4;margin:8px 0 18px">${esc(c.stem)}</div>
-      <div class="cap" style="${cap}">選項${F.reveal?'（✅ 為正確答案）':'（先想想哪個對？）'}</div>
-      <div style="margin:8px 0 4px">
-        ${c._opts.map((o,i)=>{ const isC=F.reveal && o===c.correct;
-          return `<div class="qo-learn ${isC?'ok':''}">${F.reveal? (o===c.correct?'✅':'◦') : (keys[i]||'?')+'.'} ${esc(o)}</div>`; }).join('')}
-      </div>
+    <div class="card" style="padding:26px 22px;min-height:200px">
+      <div class="cap" style="${cap}">${F.reveal?'🔄 背面 · 解答':'題目'}</div>
+      <div style="font-size:20px;font-weight:800;line-height:1.5;margin:10px 0 4px">${esc(c.stem)}</div>
       ${F.reveal? `
-        <div class="cap" style="${cap};margin-top:16px">📖 詳細解說</div>
-        <div class="fb g" style="text-align:left;margin-top:8px">${c.explain? esc(c.explain) : '<span class="muted">（此題尚未填寫解說）</span>'}</div>
-      ` : `<button class="btn block" style="margin-top:14px" onclick="flashReveal()">👀 顯示答案與解說</button>`}
+        <div class="cap" style="${cap};margin-top:22px">✅ 答案</div>
+        <div class="fb g" style="text-align:left;margin-top:8px;font-size:16px;font-weight:700;line-height:1.6">${esc(answer)}</div>
+        ${c.explain? `<div class="cap" style="${cap};margin-top:16px">📖 說明</div>
+          <div class="fb g" style="text-align:left;margin-top:8px">${esc(c.explain)}</div>`:''}
+      ` : `<div class="note center" style="margin-top:26px">先想想答案，再翻到背面對照</div>
+           <button class="btn block" style="margin-top:12px" onclick="flashReveal()">🔄 翻到背面看答案</button>`}
     </div>
     <div class="inline" style="margin-top:16px">
       <button class="btn sec" style="flex:1" onclick="flashPrev()" ${F.idx?'':'disabled'}>上一張</button>
