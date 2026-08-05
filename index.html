@@ -352,7 +352,8 @@ function answerQuiz(btn, chosen){
   const P=S.play; if(P.answered) return; P.answered=true;
   const cur=P.list[P.idx], u=me();
   const correct = String(chosen) === String(cur.correct);         // 本機立即判斷
-  const gained = correct ? (10 + Math.min(u.streak||0, 5)) : 0;
+  const bonus = correct ? Math.min(u.streak||0, 5) : 0;           // 連續天數獎勵（上限 5）
+  const gained = correct ? (10 + bonus) : 0;
   document.querySelectorAll('#opts .opt').forEach(b=>{ b.disabled=true;
     const txt=b.querySelector('span:last-child').textContent;
     if(txt===cur.correct) b.classList.add('correct');
@@ -360,7 +361,7 @@ function answerQuiz(btn, chosen){
   if(correct){ P.correctCount++; P.pointsEarned+=gained; u.points+=gained; u.answered+=1; }
   document.getElementById('fb').innerHTML=`
     <div class="fb ${correct?'g':'b'}">
-      <div class="h">${correct?`✅ 答對了！ +${gained} 分`:'❌ 答錯了'}</div>
+      <div class="h">${correct?`✅ 答對了！ +10${bonus>0?`+${bonus}`:''} 分${bonus>0?'<span style="font-weight:600;font-size:13px;color:var(--muted)">（基本 10＋連續獎勵 '+bonus+'）</span>':''}`:'❌ 答錯了'}</div>
       ${correct?'':`正確答案：<b>${esc(cur.correct)}</b><br>`}${cur.quiz_note?'💡 '+esc(cur.quiz_note):''}
     </div>
     <button class="btn block" style="margin-top:14px" onclick="nextQ()">${P.idx===P.list.length-1?'看成績':'下一題'} →</button>`;
