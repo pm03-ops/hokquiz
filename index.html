@@ -4,56 +4,146 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-<meta http-equiv="Pragma" content="no-cache" />
-<meta http-equiv="Expires" content="0" />
 <title>照護學堂 · 線上測驗</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div class="shell"><div class="auth"><div class="auth-logo"><div class="mk">✚</div><div class="nm">照護<b>學堂</b></div><div class="tag2">載入中…</div></div></div></div></div>
 <div id="toast-host"></div>
 
-<!-- 共用資料庫層 -->
-<script src="db.js?v=7"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-client.js?v=9"></script>
+<script src="db.js?v=9"></script>
 <script>
 /* =====================================================================
-   前台 index.html —— 員工作答 / 學習 / 複習 / 排行
-   資料庫共用自 db.js（DB / ROLES / seed / AI 生成 …）
+   前台 index.html —— 員工登入 / 首頁 / 字卡 / 測驗 / 複習 / 排行
+   資料來自 Supabase（db.js / Auth）。
    ===================================================================== */
 
-/* ---------- Session ---------- */
-const S = { uid: localStorage.getItem('clinic_uid_v3')||null, view:'home', play:null, learn:null, customSel:[] };
-function setUser(id){ S.uid=id; localStorage.setItem('clinic_uid_v3',id); }
-function me(){ return DB.user(S.uid); }
-function logout(){ S.uid=null; localStorage.removeItem('clinic_uid_v3'); S.view='home'; render(); }
-
-/* ---------- 獎勵 ---------- */
-function awardBadge(u,key){ if(!u.badges.includes(key)){ u.badges.push(key); const d=DB.badgeDefs().find(b=>b.key===key); toast(`🎉 獲得徽章：${d?d.name:key}`); } }
-function touchStreak(u){ const t=todayNum(); if(u.lastActive===t)return; u.streak=(u.lastActive===t-1)?u.streak+1:1; u.lastActive=t; if(u.streak>=7)awardBadge(u,'streak7'); }
-
-/* ---------- Render 主控 ---------- */
+const S = { view:'home', play:null, flash:null };
 const root=()=>document.getElementById('root');
-function render(){
-  DB.refresh(); // 讀取後台可能剛更新的題庫
-  if(!S.uid || !me() || me().role==='admin'){ renderLogin(); return; }
-  ({home:renderHome, quizzes:renderQuizList, custom:renderCustom, learn:renderLearn, play:renderPlay,
-    result:renderResult, review:renderReview, leaderboard:renderLeaderboard
-  }[S.view]||renderHome)();
+const me =()=>DB.me();
+
+/* =====================================================================
+   啟動：檢查 session → 路由
+   ===================================================================== */
+async function boot(){
+  try{
+    const s=await Auth.session();
+    if(!s){ renderLogin(); return; }
+    await Auth.loadProfile();
+    await route();
+  }catch(e){ renderLogin(e.message); }
+}
+async function route(){
+  const u=me();
+  if(!u){ renderLogin(); return; }
+  if(u.role==='admin'){ renderAdminLanding(); return; }
+  if(Auth.mustChangePassword()){ renderForceChange(); return; }
+  try{ await DB.loadForStaff(); }catch(e){ toast('資料載入失敗：'+e.message); }
+  render();
 }
 function go(v){ S.view=v; window.scrollTo(0,0); render(); }
 
+/* =====================================================================
+   登入
+   ===================================================================== */
+function renderLogin(errMsg){
+  root().innerHTML=`<div class="shell"><div class="auth">
+    <div class="auth-logo"><div class="mk">✚</div><div class="nm">照護<b>學堂</b></div>
+      <div class="tag2">養老院線上測驗與學習平台</div></div>
+    <div class="card">
+      <div class="card-h">🔑 員工登入</div>
+      <label class="fld">員工編號</label>
+      <input id="lg_id" placeholder="例如 H1974" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()">
+      <label class="fld">密碼</label>
+      <input id="lg_pw" type="password" placeholder="輸入密碼" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+      ${errMsg?`<div class="fb b" style="margin-top:12px">❌ ${esc(errMsg)}</div>`:''}
+      <button class="btn block" style="margin-top:16px" id="lg_btn" onclick="doLogin()">登入</button>
+      <div class="note center" style="margin-top:14px">忘記密碼或需要帳號？請洽管理員。</div>
+    </div>
+  </div></div>`;
+  const el=document.getElementById('lg_id'); if(el) el.focus();
+}
+async function doLogin(){
+  const id=(document.getElementById('lg_id').value||'').trim();
+  const pw=document.getElementById('lg_pw').value||'';
+  if(!id||!pw){ toast('請輸入員工編號與密碼'); return; }
+  const btn=document.getElementById('lg_btn'); if(btn){ btn.disabled=true; btn.textContent='登入中…'; }
+  try{ await Auth.login(id, pw); await route(); }
+  catch(e){
+    const msg = /Invalid login/i.test(e.message)?'員工編號或密碼錯誤':e.message;
+    renderLogin(msg);
+  }
+}
+
+/* =====================================================================
+   首次登入強制改密碼
+   ===================================================================== */
+function renderForceChange(){
+  root().innerHTML=`<div class="shell"><div class="auth">
+    <div class="auth-logo"><div class="mk">✚</div><div class="nm">照護<b>學堂</b></div>
+      <div class="tag2">首次登入 · 請設定新密碼</div></div>
+    <div class="card">
+      <div class="card-h">🔒 設定你的新密碼</div>
+      <div class="note" style="margin:0 0 12px">為了帳號安全，首次登入請將管理員給你的預設密碼改成只有你知道的密碼。</div>
+      <label class="fld">新密碼（至少 6 碼）</label>
+      <input id="pc_a" type="password" placeholder="輸入新密碼">
+      <label class="fld">再次輸入新密碼</label>
+      <input id="pc_b" type="password" placeholder="再次輸入" onkeydown="if(event.key==='Enter')doForceChange()">
+      <div id="pc_msg"></div>
+      <button class="btn block" style="margin-top:16px" id="pc_btn" onclick="doForceChange()">儲存並進入</button>
+      <button class="btn ghost block" style="margin-top:8px" onclick="Auth.logout().then(()=>renderLogin())">登出</button>
+    </div>
+  </div></div>`;
+}
+async function doForceChange(){
+  const a=document.getElementById('pc_a').value||'', b=document.getElementById('pc_b').value||'';
+  const msg=document.getElementById('pc_msg');
+  if(a.length<6){ msg.innerHTML='<div class="fb b" style="margin-top:12px">密碼至少 6 碼</div>'; return; }
+  if(a!==b){ msg.innerHTML='<div class="fb b" style="margin-top:12px">兩次輸入的密碼不一致</div>'; return; }
+  const btn=document.getElementById('pc_btn'); btn.disabled=true; btn.textContent='儲存中…';
+  try{ await Auth.changePassword(a); toast('密碼已更新'); await route(); }
+  catch(e){ msg.innerHTML=`<div class="fb b" style="margin-top:12px">❌ ${esc(e.message)}</div>`; btn.disabled=false; btn.textContent='儲存並進入'; }
+}
+
+/* =====================================================================
+   管理員登入前台 → 導向後台
+   ===================================================================== */
+function renderAdminLanding(){
+  const u=me();
+  root().innerHTML=`<div class="shell"><div class="auth">
+    <div class="auth-logo"><div class="mk">✚</div><div class="nm">照護<b>學堂</b></div>
+      <div class="tag2">管理員 · ${esc(u.name)}</div></div>
+    <div class="card">
+      <div class="card-h">🛠️ 管理員登入</div>
+      <div class="note" style="margin:0 0 14px">你是管理員帳號。請選擇要前往的頁面：</div>
+      <a class="btn block" href="admin.html">📋 題庫管理後台</a>
+      <a class="btn sec block" style="margin-top:10px" href="report.html">📊 主管報表</a>
+      <button class="btn ghost block" style="margin-top:10px" onclick="Auth.logout().then(()=>renderLogin())">登出</button>
+    </div>
+  </div></div>`;
+}
+
+/* =====================================================================
+   員工介面殼
+   ===================================================================== */
+function render(){
+  ({home:renderHome, flash:renderFlashList, quizzes:renderQuizList,
+    review:renderReview, leaderboard:renderLeaderboard }[S.view]||renderHome)();
+}
 function shell(inner, tab){
   const u=me(), r=roleOf(u.role);
-  const tabs=[{k:'home',e:'🏠',n:'首頁'},{k:'quizzes',e:'📝',n:'測驗'},{k:'review',e:'🔁',n:'複習'},{k:'leaderboard',e:'🏆',n:'排行'}];
+  const tabs=[{k:'home',e:'🏠',n:'首頁'},{k:'flash',e:'📇',n:'字卡'},{k:'quizzes',e:'📝',n:'測驗'},{k:'review',e:'🔁',n:'複習'},{k:'leaderboard',e:'🏆',n:'排行'}];
   return `<div class="shell">
     <div class="topbar">
       <div class="brand"><span class="mark">✚</span>照護<b>學堂</b></div>
       <div class="grow"></div>
       <div class="userchip"><span class="avatar" style="background:${r.color}">${esc(initials(u.name))}</span></div>
-      <button class="iconbtn" title="登出" onclick="logout()">⏻</button>
+      <button class="iconbtn" title="登出" onclick="Auth.logout().then(()=>renderLogin())">⏻</button>
     </div>
     <div class="content">${inner}</div>
     <nav class="tabbar">
@@ -63,36 +153,11 @@ function shell(inner, tab){
 }
 
 /* =====================================================================
-   登入頁（只列員工帳號；管理員請由後台登入）
-   ===================================================================== */
-function renderLogin(){
-  const users=DB.users().filter(u=>u.role!=='admin');
-  root().innerHTML=`<div class="shell"><div class="auth">
-    <div class="auth-logo">
-      <div class="mk">✚</div>
-      <div class="nm">照護<b>學堂</b></div>
-      <div class="tag2">養老院線上測驗與學習平台</div>
-    </div>
-    <div class="card">
-      <div class="card-h">🔑 選擇帳號登入</div>
-      <div class="note" style="margin:0 0 14px">點選你的帳號即可登入。</div>
-      ${users.length? users.map(u=>{ const r=roleOf(u.role);
-        return `<button class="acct" onclick="setUser('${u.id}');go('home')">
-          <span class="avatar" style="background:${r.color};width:42px;height:42px;font-size:15px">${esc(initials(u.name))}</span>
-          <div class="row-body"><div class="t">${esc(u.name)}</div><div class="s">${r.emoji} ${roleName(u.role)}</div></div>
-          <span class="go">›</span>
-        </button>`; }).join('') : '<div class="empty">尚無帳號，請由管理員建立</div>'}
-    </div>
-    <div class="note center" style="margin-top:16px">需要新帳號？請洽管理員建立。<br><a href="admin.html" class="toplink" style="display:inline-block;margin-top:10px">🛠️ 前往管理後台</a></div>
-  </div></div>`;
-}
-
-/* =====================================================================
    首頁
    ===================================================================== */
 function renderHome(){
   const u=me(), t=todayNum();
-  const due=DB.dueReviews(u.id,t).length;
+  const due=DB.dueReviews(t).length;
   const quizzes=DB.quizzesFor(u.role);
   root().innerHTML=shell(`
     <div class="greet">嗨，${esc(u.name)} 👋<span class="sub">${roleOf(u.role).emoji} ${roleName(u.role)} · 今天也一起學習吧</span></div>
@@ -109,198 +174,156 @@ function renderHome(){
     </div>`:''}
     <div class="sect">開放給你的測驗</div>
     <div class="card">
-      ${quizzes.length? quizzes.map(quizRow).join('') : '<div class="empty"><span class="e">📭</span>目前沒有開放的測驗</div>'}
+      ${quizzes.length? quizzes.map(q=>quizRow(q,true)).join('') : '<div class="empty"><span class="e">📭</span>目前沒有開放的測驗</div>'}
     </div>
     <div class="sect">我的徽章</div>
     <div class="card"><div class="badges">
-      ${DB.badgeDefs().map(b=>`<span class="badge ${u.badges.includes(b.key)?'on':'locked'}">${b.emoji} ${b.name}</span>`).join('')}
+      ${DB.badgeDefs().map(b=>`<span class="badge ${DB.myBadges().includes(b.key)?'on':'locked'}">${b.emoji} ${b.name}</span>`).join('')||'<span class="muted">尚無徽章</span>'}
     </div></div>
   `,'home');
 }
-function quizRow(q){
-  const n=DB.questionsOf(q.id).length;
+function quizRow(q, showFlash){
   return `<div class="row-item">
     <div class="thumb">${q.emoji||'📘'}</div>
     <div class="row-body">
       <div class="t">${esc(q.title)}</div>
-      <div class="s">${esc(q.desc||'')} · ${n} 題</div>
-      <div class="tags">${q.roles.map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</div>
+      <div class="s">${esc(q.descr||'')}</div>
+      <div class="tags">${(q.roles||[]).map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</div>
     </div>
     <div class="rowbtns">
-      <button class="btn sec sm" onclick="startLearn('${q.id}')">學習</button>
-      <button class="btn sm" onclick="startQuiz('${q.id}')" ${n?'':'disabled'}>測驗</button>
+      ${showFlash?`<button class="btn sec sm" onclick="openFlash('${q.id}')">字卡</button>`:''}
+      <button class="btn sm" onclick="startQuiz('${q.id}')">測驗</button>
     </div>
   </div>`;
 }
+
+/* =====================================================================
+   字卡（先學）—— 獨立區：顯示題目 + 正解 + 詳細解說
+   ===================================================================== */
+function renderFlashList(){
+  const quizzes=DB.quizzesFor(me().role);
+  root().innerHTML=shell(`
+    <div class="sect">📇 學習字卡</div>
+    <div class="admin-hint">💡 字卡是「先學」：直接看題目、正確答案與完整解說，讀熟了再去「測驗」自我檢測。</div>
+    <div class="card">
+      ${quizzes.length? quizzes.map(q=>`<div class="row-item">
+        <div class="thumb">${q.emoji||'📘'}</div>
+        <div class="row-body"><div class="t">${esc(q.title)}</div><div class="s">${esc(q.descr||'')}</div></div>
+        <button class="btn sm" onclick="openFlash('${q.id}')">讀字卡 →</button>
+      </div>`).join('') : '<div class="empty"><span class="e">📭</span>目前沒有開放的測驗</div>'}
+    </div>
+  `,'flash');
+}
+async function openFlash(quizId){
+  try{
+    const cards=await DB.ensureFlash(quizId);
+    if(!cards.length){ toast('這份測驗還沒有題目'); return; }
+    // 每張卡預先算好隨機選項順序（本次瀏覽固定），正解混在其中
+    const list=cards.map(c=>({ ...c, _opts: shuffle([c.correct, ...((c.distractors)||[])]) }));
+    S.flash={ quizId, idx:0, list, reveal:false }; S.view='flash'; renderFlashCard();
+  }catch(e){ toast('載入失敗：'+e.message); }
+}
+function renderFlashCard(){
+  const F=S.flash, c=F.list[F.idx], quiz=DB.quiz(F.quizId)||{}, keys=['A','B','C','D','E','F'];
+  const cap='font-size:12px;font-weight:800;letter-spacing:1.5px;color:var(--muted)';
+  root().innerHTML=shell(`
+    <div class="qhead"><span>📇 ${esc(quiz.title||'字卡')}</span><span>${F.idx+1} / ${F.list.length}</span></div>
+    <div class="bar"><i style="width:${(F.idx+1)/F.list.length*100}%"></i></div>
+    <div class="card" style="padding:22px">
+      <div class="cap" style="${cap}">題目</div>
+      <div style="font-size:20px;font-weight:800;line-height:1.4;margin:8px 0 18px">${esc(c.stem)}</div>
+      <div class="cap" style="${cap}">選項${F.reveal?'（✅ 為正確答案）':'（先想想哪個對？）'}</div>
+      <div style="margin:8px 0 4px">
+        ${c._opts.map((o,i)=>{ const isC=F.reveal && o===c.correct;
+          return `<div class="qo-learn ${isC?'ok':''}">${F.reveal? (o===c.correct?'✅':'◦') : (keys[i]||'?')+'.'} ${esc(o)}</div>`; }).join('')}
+      </div>
+      ${F.reveal? `
+        <div class="cap" style="${cap};margin-top:16px">📖 詳細解說</div>
+        <div class="fb g" style="text-align:left;margin-top:8px">${c.explain? esc(c.explain) : '<span class="muted">（此題尚未填寫解說）</span>'}</div>
+      ` : `<button class="btn block" style="margin-top:14px" onclick="flashReveal()">👀 顯示答案與解說</button>`}
+    </div>
+    <div class="inline" style="margin-top:16px">
+      <button class="btn sec" style="flex:1" onclick="flashPrev()" ${F.idx?'':'disabled'}>上一張</button>
+      ${F.idx===F.list.length-1
+        ? `<button class="btn" style="flex:2" onclick="go('flash')">完成 ✓</button>`
+        : `<button class="btn" style="flex:2" onclick="flashNext()">下一張 →</button>`}
+    </div>
+  `,'flash');
+}
+function flashReveal(){ S.flash.reveal=true; renderFlashCard(); }
+function flashNext(){ if(S.flash.idx<S.flash.list.length-1){ S.flash.idx++; S.flash.reveal=false; renderFlashCard(); } }
+function flashPrev(){ if(S.flash.idx>0){ S.flash.idx--; S.flash.reveal=false; renderFlashCard(); } }
 
 /* =====================================================================
    測驗列表
    ===================================================================== */
 function renderQuizList(){
   const u=me(), quizzes=DB.quizzesFor(u.role);
-  const learnedN=learnedQuestions().length, hardN=hardQuestions().length;
   root().innerHTML=shell(`
-    <div class="sect">練習模式</div>
-    <div class="card">
-      <div class="row-item">
-        <div class="thumb">🎲</div>
-        <div class="row-body"><div class="t">隨機綜合測驗</div><div class="s">從你學過的單元隨機混合出題 · 可用 ${learnedN} 題</div></div>
-        <button class="btn sm" onclick="startMixed()">開始</button>
-      </div>
-      <div class="row-item">
-        <div class="thumb">🎯</div>
-        <div class="row-body"><div class="t">自訂單元測驗</div><div class="s">自己挑選要練習哪些單元</div></div>
-        <button class="btn sm" onclick="go('custom')">選擇</button>
-      </div>
-      <div class="row-item">
-        <div class="thumb">🔧</div>
-        <div class="row-body"><div class="t">加強弱點</div><div class="s">把你常錯的題目再練一次 · ${hardN} 題待加強</div></div>
-        <button class="btn sm" onclick="startHard()">開始</button>
-      </div>
-    </div>
-
-    <div class="sect">全部測驗</div>
-    <div class="card">${quizzes.length? quizzes.map(quizRow).join('') : '<div class="empty"><span class="e">📭</span>目前沒有開放的測驗</div>'}</div>
+    <div class="sect">📝 全部測驗</div>
+    <div class="admin-hint">💡 測驗會即時評分並記錄成績；作答時看不到正解，答完才會顯示對錯與重點提示。</div>
+    <div class="card">${quizzes.length? quizzes.map(q=>quizRow(q,false)).join('') : '<div class="empty"><span class="e">📭</span>目前沒有開放的測驗</div>'}</div>
     <div class="note center" style="margin-top:14px">只顯示開放給你角色（${roleName(u.role)}）的測驗</div>
   `,'quizzes');
 }
 
-/* ---------- 練習模式：資料與啟動 ---------- */
-function openQuizIds(){ return new Set(DB.quizzesFor(me().role).map(q=>q.id)); }
-function myAnswers(){ return DB.answers().filter(a=>a.userId===S.uid); }
-function learnedQuestions(){
-  const oq=openQuizIds(), ids=new Set();
-  myAnswers().forEach(a=>ids.add(a.questionId));
-  DB.data.reviews.filter(r=>r.userId===S.uid).forEach(r=>ids.add(r.questionId));
-  return [...ids].map(id=>DB.question(id)).filter(q=>q && oq.has(q.quizId));
-}
-function hardQuestions(){
-  const oq=openQuizIds(), stat={};
-  myAnswers().forEach(a=>{ const s=stat[a.questionId]||(stat[a.questionId]={wrong:0,total:0}); s.total++; if(!a.correct)s.wrong++; });
-  return Object.keys(stat).map(id=>({ q:DB.question(id), r:stat[id] }))
-    .filter(x=>x.q && oq.has(x.q.quizId) && x.r.wrong>0)
-    .sort((a,b)=> (b.r.wrong/b.r.total)-(a.r.wrong/a.r.total) || b.r.wrong-a.r.wrong)
-    .map(x=>x.q);
-}
-function startMixed(){
-  const pool=learnedQuestions();
-  if(pool.length<1){ toast('先完成一些測驗，才有學過的題目可以混合'); return; }
-  beginQuiz('🎲 隨機綜合', shuffle(pool).slice(0,10), startMixed);
-}
-function startHard(){
-  const pool=hardQuestions();
-  if(!pool.length){ toast('太棒了！你目前沒有常錯的題目 🎉'); return; }
-  beginQuiz('🔧 加強弱點', pool.slice(0,10), startHard);
-}
-function startCustom(ids){
-  const oq=openQuizIds();
-  const sel=(ids||S.customSel).filter(id=>oq.has(id));
-  if(!sel.length){ toast('請至少選一個單元'); return; }
-  let qs=[]; sel.forEach(id=>{ qs=qs.concat(DB.questionsOf(id)); });
-  if(!qs.length){ toast('所選單元還沒有題目'); return; }
-  beginQuiz('🎯 自訂測驗', qs, ()=>startCustom(sel));
-}
-function renderCustom(){
-  const quizzes=DB.quizzesFor(me().role);
-  root().innerHTML=shell(`
-    <div class="sect">🎯 自訂測驗 · 選擇單元</div>
-    <div class="card">
-      ${quizzes.length? quizzes.map(q=>{ const n=DB.questionsOf(q.id).length, on=S.customSel.includes(q.id);
-        return `<div class="chip-ck ${on?'sel':''}" style="display:flex;width:100%;margin-bottom:8px;justify-content:space-between" onclick="toggleCustom('${q.id}')">
-          <span>${q.emoji||'📘'} ${esc(q.title)} <span class="muted">· ${n}題</span></span>
-          <b style="color:var(--brand-dk)">${on?'✓':''}</b></div>`; }).join('') : '<div class="empty">沒有可選單元</div>'}
-    </div>
-    <button class="btn block" style="margin-top:14px" onclick="startCustom()">開始測驗（已選 ${S.customSel.length} 單元）</button>
-    <button class="btn ghost block" style="margin-top:8px" onclick="go('quizzes')">返回</button>
-  `,'quizzes');
-}
-function toggleCustom(id){ const i=S.customSel.indexOf(id); if(i<0)S.customSel.push(id); else S.customSel.splice(i,1); renderCustom(); }
-function retryPlay(){ if(S.play&&S.play.retry) S.play.retry(); }
-
 /* =====================================================================
-   學習模式（先學後測）
+   作答（伺服器評分）
    ===================================================================== */
-function startLearn(quizId){
-  const qs=DB.questionsOf(quizId);
-  if(!qs.length){ toast('這份測驗還沒有題目'); return; }
-  S.learn={ quizId, idx:0, list:qs }; go('learn');
-}
-function renderLearn(){
-  const L=S.learn, q=L.list[L.idx], last=L.idx===L.list.length-1;
-  root().innerHTML=shell(`
-    <div class="qhead"><span>📚 學習模式</span><span>${L.idx+1} / ${L.list.length}</span></div>
-    <div class="bar"><i style="width:${(L.idx+1)/L.list.length*100}%"></i></div>
-    <div class="card" style="padding:22px">
-      <div class="cap" style="font-size:12px;font-weight:800;letter-spacing:1.5px;color:var(--muted)">題目</div>
-      <div style="font-size:20px;font-weight:800;line-height:1.4;margin:8px 0 18px">${esc(q.stem)}</div>
-      <div class="cap" style="font-size:12px;font-weight:800;letter-spacing:1.5px;color:var(--muted)">選項（考試會出現的內容 · 已標示正解）</div>
-      <div style="margin:8px 0 4px">
-        ${[q.correct,...q.distractors].map(o=>`<div class="qo-learn ${o===q.correct?'ok':''}">${o===q.correct?'✅':'◦'} ${esc(o)}</div>`).join('')}
-      </div>
-      <div class="cap" style="font-size:12px;font-weight:800;letter-spacing:1.5px;color:var(--muted);margin-top:16px">📖 重點解說</div>
-      <div class="fb g" style="text-align:left;margin-top:8px">${q.explain? esc(q.explain) : '<span class="muted">（此題尚未填寫解說，可請管理員在後台用「🤖 生成教學解說」補上）</span>'}</div>
-    </div>
-    <div class="inline" style="margin-top:16px">
-      <button class="btn sec" style="flex:1" onclick="learnPrev()" ${L.idx?'':'disabled'}>上一張</button>
-      ${last? `<button class="btn" style="flex:2" onclick="startQuiz('${L.quizId}')">開始測驗 →</button>`
-            : `<button class="btn" style="flex:2" onclick="learnNext()">下一張 →</button>`}
-    </div>
-  `,'quizzes');
-}
-function learnNext(){ if(S.learn.idx<S.learn.list.length-1){S.learn.idx++;render();} }
-function learnPrev(){ if(S.learn.idx>0){S.learn.idx--;render();} }
-
-/* =====================================================================
-   作答（選項洗牌 → 正解位置隨機）
-   ===================================================================== */
-function startQuiz(quizId){
-  const src=DB.questionsOf(quizId);
-  if(!src.length){ toast('這份測驗還沒有題目'); return; }
-  beginQuiz((DB.quiz(quizId)||{}).title||'測驗', src, ()=>startQuiz(quizId), quizId);
-}
-/* 通用啟動：可用於單一測驗或練習模式的任意題目集合 */
-function beginQuiz(title, questions, retry, quizId){
-  const qs=shuffle(questions);
-  if(!qs.length){ toast('沒有可用的題目'); return; }
-  S.play={ quizId:quizId||'__mix__', title, idx:0, list:qs, correctCount:0, pointsEarned:0, answered:false, isReview:false, retry,
-    prepared: qs.map(q=>{ const opts=shuffle([q.correct,...q.distractors]); return {q,opts,correctIdx:opts.indexOf(q.correct)}; }) };
-  go('play');
+async function startQuiz(quizId){
+  try{
+    const qs=await DB.ensureQuizQuestions(quizId);
+    if(!qs.length){ toast('這份測驗還沒有題目'); return; }
+    S.play={ quizId, sessionId:newSessionId(), title:(DB.quiz(quizId)||{}).title||'測驗',
+      list:shuffle(qs), idx:0, answered:false, correctCount:0, pointsEarned:0 };
+    S.view='quizzes'; renderPlay();
+  }catch(e){ toast('載入失敗：'+e.message); }
 }
 function renderPlay(){
-  const P=S.play, cur=P.prepared[P.idx], keys=['A','B','C','D'];
+  const P=S.play, cur=P.list[P.idx], keys=['A','B','C','D','E','F'];
   root().innerHTML=shell(`
-    <div class="qhead"><span>${esc(P.title||(DB.quiz(P.quizId)||{}).title||'測驗')}</span><span>${P.idx+1} / ${P.list.length}</span></div>
+    <div class="qhead"><span>${esc(P.title)}</span><span>${P.idx+1} / ${P.list.length}</span></div>
     <div class="bar"><i style="width:${P.idx/P.list.length*100}%"></i></div>
-    <div class="stem">${esc(cur.q.stem)}</div>
+    <div class="stem">${esc(cur.stem)}</div>
     <div id="opts">
-      ${cur.opts.map((o,i)=>`<button class="opt" onclick="answer(${i})"><span class="key">${keys[i]}</span><span>${esc(o)}</span></button>`).join('')}
+      ${(cur.options||[]).map((o,i)=>`<button class="opt" onclick="answerQuiz(this,${JSON.stringify(o).replace(/"/g,'&quot;')})"><span class="key">${keys[i]||'?'}</span><span>${esc(o)}</span></button>`).join('')}
     </div>
     <div id="fb"></div>
   `,'quizzes');
 }
-function answer(i){
-  const P=S.play; if(P.answered)return; P.answered=true;
-  const cur=P.prepared[P.idx], correct=i===cur.correctIdx, u=me();
-  document.querySelectorAll('#opts .opt').forEach((b,idx)=>{ b.disabled=true; if(idx===cur.correctIdx)b.classList.add('correct'); else if(idx===i)b.classList.add('wrong'); });
-  let gained=0;
-  if(correct){ gained=10+Math.min(u.streak,5); P.correctCount++; P.pointsEarned+=gained; u.points+=gained; u.answered+=1; if(u.answered>=100)awardBadge(u,'century'); }
-  DB.addAnswer({ userId:u.id, quizId:cur.q.quizId, questionId:cur.q.id, correct, at:Date.now() });
-  DB.upsertReview(u.id,cur.q.id,correct,todayNum()); DB.commit();
-  document.getElementById('fb').innerHTML=`
-    <div class="fb ${correct?'g':'b'}">
-      <div class="h">${correct?`✅ 答對了！ +${gained} 分`:'❌ 答錯了'}</div>
-      ${correct?'':`正確答案：<b>${esc(cur.q.correct)}</b><br>`}${cur.q.explain?'💡 '+esc(cur.q.explain):''}
-    </div>
-    <button class="btn block" style="margin-top:14px" onclick="nextQ()">${P.idx===P.list.length-1?'看成績':'下一題'} →</button>`;
-  document.getElementById('fb').scrollIntoView({behavior:'smooth',block:'nearest'});
+async function answerQuiz(btn, chosen){
+  const P=S.play; if(P.answered) return; P.answered=true;
+  document.querySelectorAll('#opts .opt').forEach(b=>b.disabled=true);
+  document.getElementById('fb').innerHTML='<div class="note center">評分中…</div>';
+  const cur=P.list[P.idx];
+  try{
+    const res=await DB.grade(P.sessionId, P.quizId, cur.id, chosen);
+    DB.applyGradeResult(P.quizId, cur.id, res);
+    if(res.correct){ P.correctCount++; P.pointsEarned+=(res.gained||0); }
+    document.querySelectorAll('#opts .opt').forEach(b=>{
+      const txt=b.querySelector('span:last-child').textContent;
+      if(txt===res.correctAnswer) b.classList.add('correct');
+      else if(txt===chosen) b.classList.add('wrong');
+    });
+    document.getElementById('fb').innerHTML=`
+      <div class="fb ${res.correct?'g':'b'}">
+        <div class="h">${res.correct?`✅ 答對了！ +${res.gained||0} 分`:'❌ 答錯了'}</div>
+        ${res.correct?'':`正確答案：<b>${esc(res.correctAnswer||'')}</b><br>`}${res.quizNote?'💡 '+esc(res.quizNote):''}
+      </div>
+      <button class="btn block" style="margin-top:14px" onclick="nextQ()">${P.idx===P.list.length-1?'看成績':'下一題'} →</button>`;
+    document.getElementById('fb').scrollIntoView({behavior:'smooth',block:'nearest'});
+  }catch(e){
+    P.answered=false;
+    document.querySelectorAll('#opts .opt').forEach(b=>b.disabled=false);
+    document.getElementById('fb').innerHTML=`<div class="fb b">❌ 評分失敗：${esc(e.message)}</div>`;
+  }
 }
-function nextQ(){ const P=S.play; if(P.idx<P.list.length-1){P.idx++;P.answered=false;render();} else finishQuiz(); }
-function finishQuiz(){
-  const P=S.play, u=me();
-  touchStreak(u); awardBadge(u,'first');
-  if(P.correctCount===P.list.length && P.list.length>0) awardBadge(u,'perfect');
-  DB.addAttempt({ userId:u.id, quizId:P.quizId, score:P.correctCount, total:P.list.length, points:P.pointsEarned, at:Date.now() });
-  DB.commit(); go('result');
+function nextQ(){ const P=S.play; if(P.idx<P.list.length-1){ P.idx++; P.answered=false; renderPlay(); } else finishQuiz(); }
+async function finishQuiz(){
+  const P=S.play;
+  if(P.isReview){ toast(`複習完成！+${P.pointsEarned} 分`); go('home'); return; }
+  try{ await DB.finish(P.sessionId, P.quizId); }catch(e){ /* 成績已於作答時逐題記錄，仍顯示結果 */ }
+  renderResult();
 }
 function renderResult(){
   const P=S.play, pct=Math.round(P.correctCount/P.list.length*100);
@@ -310,14 +333,14 @@ function renderResult(){
     <div class="card center" style="padding:34px 22px">
       <div class="big-emoji">${emoji}</div>
       <h3 style="font-size:22px;font-weight:900;margin:12px 0 2px">${line}</h3>
-      <div class="muted" style="font-size:13px">${esc(P.title||(DB.quiz(P.quizId)||{}).title||'測驗')}</div>
+      <div class="muted" style="font-size:13px">${esc(P.title)}</div>
       <div class="stats" style="margin-top:22px">
         <div class="tile"><div class="num">${P.correctCount}/${P.list.length}</div><div class="lbl">答對題數</div></div>
         <div class="tile"><div class="num">${pct}%</div><div class="lbl">正確率</div></div>
         <div class="tile"><div class="num" style="color:var(--brand)">+${P.pointsEarned}</div><div class="lbl">獲得積分</div></div>
       </div>
       <div class="inline" style="margin-top:22px">
-        <button class="btn sec" style="flex:1" onclick="retryPlay()">再測一次</button>
+        <button class="btn sec" style="flex:1" onclick="startQuiz('${P.quizId}')">再測一次</button>
         <button class="btn" style="flex:1" onclick="go('home')">回首頁</button>
       </div>
     </div>
@@ -325,10 +348,10 @@ function renderResult(){
 }
 
 /* =====================================================================
-   複習（SRS）
+   複習（SRS）—— 也走伺服器評分
    ===================================================================== */
-function renderReview(){
-  const u=me(), t=todayNum(), due=DB.dueReviews(u.id,t);
+async function renderReview(){
+  const t=todayNum(), due=DB.dueReviews(t);
   if(!due.length){
     root().innerHTML=shell(`<div class="card center" style="padding:40px 22px">
       <div class="big-emoji">🎉</div>
@@ -337,37 +360,14 @@ function renderReview(){
       <button class="btn" style="margin-top:18px" onclick="go('quizzes')">去做測驗</button>
     </div>`,'review'); return;
   }
-  const qs=due.map(r=>DB.question(r.questionId)).filter(Boolean);
-  S.play={ quizId:'__review__', idx:0, list:qs, correctCount:0, pointsEarned:0, answered:false, isReview:true,
-    prepared: qs.map(q=>{ const opts=shuffle([q.correct,...q.distractors]); return {q,opts,correctIdx:opts.indexOf(q.correct)}; }) };
-  renderReviewPlay();
-}
-function renderReviewPlay(){
-  const P=S.play, cur=P.prepared[P.idx], keys=['A','B','C','D'];
-  root().innerHTML=shell(`
-    <div class="qhead"><span>🔁 今日複習</span><span>${P.idx+1} / ${P.list.length}</span></div>
-    <div class="bar"><i style="width:${P.idx/P.list.length*100}%"></i></div>
-    <div class="stem">${esc(cur.q.stem)}</div>
-    <div id="opts">${cur.opts.map((o,i)=>`<button class="opt" onclick="answerReview(${i})"><span class="key">${keys[i]}</span><span>${esc(o)}</span></button>`).join('')}</div>
-    <div id="fb"></div>
-  `,'review');
-}
-function answerReview(i){
-  const P=S.play; if(P.answered)return; P.answered=true;
-  const cur=P.prepared[P.idx], correct=i===cur.correctIdx, u=me();
-  document.querySelectorAll('#opts .opt').forEach((b,idx)=>{ b.disabled=true; if(idx===cur.correctIdx)b.classList.add('correct'); else if(idx===i)b.classList.add('wrong'); });
-  if(correct){ u.points+=5; P.correctCount++; P.pointsEarned+=5; }
-  DB.addAnswer({ userId:u.id, quizId:cur.q.quizId, questionId:cur.q.id, correct, at:Date.now() });
-  DB.upsertReview(u.id,cur.q.id,correct,todayNum()); DB.commit();
-  document.getElementById('fb').innerHTML=`
-    <div class="fb ${correct?'g':'b'}"><div class="h">${correct?'✅ 答對 +5 分':'❌ 答錯，會更快再出現'}</div>
-    ${correct?'':`正確答案：<b>${esc(cur.q.correct)}</b><br>`}${cur.q.explain?'💡 '+esc(cur.q.explain):''}</div>
-    <button class="btn block" style="margin-top:14px" onclick="nextReview()">${P.idx===P.list.length-1?'完成複習':'下一題'} →</button>`;
-}
-function nextReview(){
-  const P=S.play;
-  if(P.idx<P.list.length-1){ P.idx++; P.answered=false; renderReviewPlay(); }
-  else{ const u=me(); touchStreak(u); DB.commit(); toast(`複習完成！+${P.pointsEarned} 分`); go('home'); }
+  root().innerHTML=shell('<div class="note center" style="padding:40px">載入複習題目…</div>','review');
+  try{
+    const qs=await DB.questionsByIds(due.map(r=>r.question_id));
+    if(!qs.length){ root().innerHTML=shell('<div class="empty">複習題目已不存在</div>','review'); return; }
+    S.play={ quizId:'__review__', sessionId:newSessionId(), title:'🔁 今日複習',
+      list:qs, idx:0, answered:false, correctCount:0, pointsEarned:0, isReview:true };
+    renderPlay();
+  }catch(e){ root().innerHTML=shell(`<div class="empty">載入失敗：${esc(e.message)}</div>`,'review'); }
 }
 
 /* =====================================================================
@@ -375,11 +375,11 @@ function nextReview(){
    ===================================================================== */
 function renderLeaderboard(){
   const u=me();
-  const users=DB.users().filter(x=>x.role!=='admin').slice().sort((a,b)=>b.points-a.points);
+  const rows=DB.leaderboard().slice().sort((a,b)=>b.points-a.points);
   root().innerHTML=shell(`
-    <div class="sect">積分排行榜</div>
+    <div class="sect">🏆 積分排行榜</div>
     <div class="card">
-      ${users.map((x,i)=>{ const r=roleOf(x.role); const medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':(i+1);
+      ${rows.map((x,i)=>{ const r=roleOf(x.role); const medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':(i+1);
         return `<div class="lb ${x.id===u.id?'mine':''}">
           <div class="rk ${i<3?'top':''}">${medal}</div>
           <span class="avatar" style="background:${r.color}">${esc(initials(x.name))}</span>
@@ -392,7 +392,7 @@ function renderLeaderboard(){
 }
 
 /* ---------- 啟動 ---------- */
-render();
+boot();
 </script>
 </body>
 </html>

@@ -4,50 +4,63 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-<meta http-equiv="Pragma" content="no-cache" />
-<meta http-equiv="Expires" content="0" />
 <title>照護學堂 · 管理後台</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div class="shell wide"><div class="content"><div class="note center" style="padding:60px">載入中…</div></div></div></div>
 <div id="toast-host"></div>
 
-<!-- 共用資料庫層（與前台 index.html 同一份） -->
-<script src="db.js?v=7"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-client.js?v=9"></script>
+<script src="db.js?v=9"></script>
 <script>
 /* =====================================================================
-   後台 admin.html —— 獨立管理端
-   只負責維護資料庫中的「題庫」：測驗、題目、帳號。
-   與前台 index.html 共用 db.js（同一份 localStorage / 未來同一個 Supabase）。
+   後台 admin.html —— 題庫管理（測驗 / 題目 / 帳號 / AI）
+   僅限管理員（role=admin）。非管理員一律導回前台登入。
    ===================================================================== */
 
-const Sa = { tab:'quizzes', material:'', impN:5, drafts:[], draftQuiz:null,
-  editQuiz:null, k:null };
-function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'' }; }
+const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', impN:5, drafts:[], draftQuiz:null };
+function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'', quizNote:'' }; }
 resetK();
 const root=()=>document.getElementById('root');
 
+/* ---------- 啟動：驗證管理員身分 ---------- */
+async function boot(){
+  const s=await Auth.session();
+  if(!s){ location.href='index.html'; return; }
+  await Auth.loadProfile();
+  if(!Auth.isAdmin()){
+    root().innerHTML=`<div class="shell wide"><div class="content"><div class="card center" style="padding:50px 22px">
+      <div class="big-emoji">🔒</div><h3 style="margin:12px 0">此頁僅限管理員</h3>
+      <div class="note center">你的帳號沒有管理員權限。</div>
+      <a class="btn" style="margin-top:18px" href="index.html">↩ 回前台</a>
+    </div></div></div>`;
+    return;
+  }
+  try{ await DB.loadForAdmin(); Sa.profiles=await DB.allProfiles(); }catch(e){ toast('載入失敗：'+e.message); }
+  render();
+}
+
 const TABS=[
   {k:'quizzes',  e:'📋', n:'測驗管理'},
-  {k:'import',   e:'📄', n:'AI 匯入出題'},
   {k:'questions',e:'📝', n:'題目'},
+  {k:'import',   e:'📄', n:'AI 匯入出題'},
   {k:'users',    e:'👤', n:'帳號'},
   {k:'settings', e:'⚙️', n:'AI 設定'},
 ];
-
 function render(){
-  DB.refresh();
-  const body={ quizzes:viewQuizzes, import:viewImport, questions:viewQuestions, users:viewUsers, settings:viewSettings }[Sa.tab]();
+  const body={ quizzes:viewQuizzes, questions:viewQuestions, import:viewImport, users:viewUsers, settings:viewSettings }[Sa.tab]();
   root().innerHTML=`<div class="shell wide">
     <div class="topbar">
       <div class="brand"><span class="mark">✚</span>照護<b>學堂</b> · 管理後台</div>
       <div class="grow"></div>
       <a href="report.html" class="toplink" style="margin-right:8px">📊 主管報表</a>
-      <a href="index.html" class="toplink">↩ 前往前台</a>
+      <a href="index.html" class="toplink" style="margin-right:8px">↩ 前台</a>
+      <button class="iconbtn" title="登出" onclick="Auth.logout().then(()=>location.href='index.html')">⏻</button>
     </div>
     <div class="tabnav">
       ${TABS.map(t=>`<button class="${Sa.tab===t.k?'on':''}" onclick="goTab('${t.k}')">${t.e} ${t.n}</button>`).join('')}
@@ -58,7 +71,6 @@ function render(){
 }
 function goTab(k){ Sa.tab=k; window.scrollTo(0,0); render(); }
 function bindChips(){
-  // 用 input 的 change 事件（label 會原生切換 checkbox，這裡只更新樣式）
   document.querySelectorAll('#nq_roles input').forEach(cb=>{
     cb.onchange=()=>cb.closest('.chip-ck').classList.toggle('sel', cb.checked); });
   document.querySelectorAll('#nu_role input').forEach(rb=>{
@@ -90,42 +102,230 @@ function viewQuizzes(){
         return `<div class="row-item">
           <div class="thumb">${q.emoji||'📘'}</div>
           <div class="row-body"><div class="t">${esc(q.title)}</div>
-            <div class="s">${esc(q.desc||'')} · ${n} 題</div>
-            <div class="tags">${q.roles.map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</div></div>
+            <div class="s">${esc(q.descr||'')} · ${n} 題</div>
+            <div class="tags">${(q.roles||[]).map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</div></div>
           <button class="btn danger sm" onclick="removeQuiz('${q.id}')">刪除</button>
         </div>`; }).join('') || '<div class="empty">尚無測驗</div>'}
     </div>
   </div>`;
 }
-function createQuiz(){
+async function createQuiz(){
   const title=document.getElementById('nq_title').value.trim();
   if(!title){ toast('請輸入測驗名稱'); return; }
   const roles=[...document.querySelectorAll('#nq_roles input:checked')].map(c=>c.value);
   if(!roles.length){ toast('請至少選一個開放對象'); return; }
-  DB.addQuiz({ title, desc:document.getElementById('nq_desc').value.trim(), emoji:'📘', roles });
-  toast('測驗已建立'); render();
+  try{ await DB.addQuiz({ title, descr:document.getElementById('nq_desc').value.trim(), emoji:'📘', roles }); toast('測驗已建立'); render(); }
+  catch(e){ toast('建立失敗：'+e.message); }
 }
-function removeQuiz(id){
+async function removeQuiz(id){
   const n=DB.questionsOf(id).length;
   if(!confirm(`確定刪除此測驗？${n?`（含 ${n} 題會一併刪除）`:''}`)) return;
-  DB.delQuiz(id); toast('已刪除'); render();
+  try{ await DB.delQuiz(id); toast('已刪除'); render(); }catch(e){ toast('刪除失敗：'+e.message); }
 }
 
 /* =====================================================================
-   AI 匯入教材出題
+   題目 —— 先選測驗，再用 Kahoot 式介面出題
    ===================================================================== */
-function viewSettings(){
-  return `
-  <div class="admin-hint">💡 在這裡設定 AI（Google Gemini／Gemma）。設定並儲存後，出題與匯入的「🤖」按鈕就會改用<b>真 AI</b> 生成；未設定時自動用本機規則生成，功能不會壞。</div>
-  ${aiSettingsCard()}`;
+const KT=[
+  { cls:'kt-red',    shape:'▲' },
+  { cls:'kt-blue',   shape:'◆' },
+  { cls:'kt-yellow', shape:'●' },
+  { cls:'kt-green',  shape:'■' },
+];
+function viewQuestions(){
+  if(!DB.quizzes().length) return `<div class="admin-hint">請先到「測驗管理」建立至少一個測驗，才能出題。</div>`;
+  if(Sa.editQuiz && !DB.quiz(Sa.editQuiz)) Sa.editQuiz=null;
+  return Sa.editQuiz ? viewQuizEditor() : viewQuizPicker();
 }
+function viewQuizPicker(){
+  return `
+  <div class="admin-hint">💡 先選擇一份測驗，再進去新增題目。點「出題」進入 Kahoot 式編輯畫面。</div>
+  <div class="card">
+    <div class="card-h">📋 選擇要出題的測驗</div>
+    ${DB.quizzes().map(q=>{ const n=DB.questionsOf(q.id).length;
+      return `<div class="row-item">
+        <div class="thumb">${q.emoji||'📘'}</div>
+        <div class="row-body"><div class="t">${esc(q.title)}</div>
+          <div class="s">${esc(q.descr||'')} · ${n} 題</div>
+          <div class="tags">${(q.roles||[]).map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</div></div>
+        <button class="btn sm" onclick="openQuizEditor('${q.id}')">出題 →</button>
+      </div>`; }).join('')}
+  </div>`;
+}
+function openQuizEditor(id){ Sa.editQuiz=id; resetK(); window.scrollTo(0,0); render(); }
+function backToPicker(){ Sa.editQuiz=null; resetK(); render(); }
+
+function viewQuizEditor(){
+  const quiz=DB.quiz(Sa.editQuiz), list=DB.questionsOf(quiz.id), editing=!!Sa.k.qid;
+  return `
+  <div class="crumb">
+    <button class="back" onclick="backToPicker()">← 所有測驗</button>
+    <span class="cur">${quiz.emoji||'📘'} ${esc(quiz.title)}</span>
+    <span class="tags">${(quiz.roles||[]).map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</span>
+  </div>
+
+  <div class="card">
+    <div class="card-h">${editing?'✏️ 編輯題目':'➕ 新增題目'}</div>
+    <textarea class="k-stem" placeholder="在這裡輸入題目…" oninput="Sa.k.stem=this.value">${esc(Sa.k.stem)}</textarea>
+    <div class="ktiles">
+      ${KT.map((t,i)=>`<div class="ktile ${t.cls} ${Sa.k.correctIdx===i?'correct':''}">
+        <span class="shape">${t.shape}</span>
+        <input placeholder="輸入答案 ${i+1}" value="${esc(Sa.k.answers[i]||'')}" oninput="Sa.k.answers[${i}]=this.value">
+        <button class="mark" title="設為正確答案" onclick="setCorrect(${i})">${Sa.k.correctIdx===i?'✓':''}</button>
+      </div>`).join('')}
+    </div>
+    <div class="k-correcthint">點右側 ⭘ 圈選哪一個是<b>正確答案</b>（目前：答案 ${Sa.k.correctIdx+1}）。作答時選項順序會自動隨機。</div>
+    <button class="btn amber block" style="margin-top:10px" onclick="genKahootAI()">🤖 AI 依正解生成其餘 3 個錯誤答案</button>
+
+    <label class="fld">📇 字卡詳細解說（先學用 · 越完整越好）</label>
+    <textarea placeholder="完整說明正確答案的觀念、原理、易混淆重點…（字卡區會顯示這段）" oninput="Sa.k.explain=this.value">${esc(Sa.k.explain)}</textarea>
+    <button class="btn sec block" style="margin-top:8px" onclick="genExplainKahoot()">🤖 AI 生成字卡詳細解說（依本題內容）</button>
+
+    <label class="fld">📝 測驗簡短提示（答完題後顯示的一句話 · 可留空）</label>
+    <input placeholder="例如：洗手五時機要記牢" value="${esc(Sa.k.quizNote)}" oninput="Sa.k.quizNote=this.value">
+
+    <div class="inline" style="margin-top:12px">
+      ${editing?`<button class="btn ghost" style="flex:1" onclick="cancelEdit()">取消編輯</button>`:''}
+      <button class="btn" style="flex:2" onclick="saveKahoot()">${editing?'更新題目':'加入此測驗'}</button>
+    </div>
+  </div>
+
+  <div class="sect">此測驗的題目（${list.length}）</div>
+  ${list.length? list.map(q=>{
+    const opts=[q.correct, ...(q.distractors||[])];
+    return `<div class="qcard">
+      <div class="qh"><p class="stem">${esc(q.stem)}</p>
+        <div class="rowbtns">
+          <button class="btn sec sm" onclick="editQuestion('${q.id}')">編輯</button>
+          <button class="btn danger sm" onclick="delQ('${q.id}')">刪除</button>
+        </div></div>
+      <div class="qopts">${opts.map((o,i)=>`<span class="qo ${i===0?'ok':''}">${i===0?'✓ ':''}${esc(o)}</span>`).join('')}</div>
+      ${q.quiz_note?`<div class="note" style="margin:6px 0 0">📝 ${esc(q.quiz_note)}</div>`:''}
+    </div>`; }).join('') : '<div class="empty">此測驗還沒有題目，用上方表單新增第一題吧！</div>'}
+  `;
+}
+function setCorrect(i){ Sa.k.correctIdx=i; render(); }
+function editQuestion(id){
+  const q=DB.question(id); if(!q) return;
+  Sa.k={ qid:q.id, stem:q.stem, answers:[q.correct, ...(q.distractors||[])].slice(0,4), correctIdx:0, explain:q.explain||'', quizNote:q.quiz_note||'' };
+  window.scrollTo(0,0); render();
+}
+function cancelEdit(){ resetK(); render(); }
+async function saveKahoot(){
+  const stem=(Sa.k.stem||'').trim(), ci=Sa.k.correctIdx;
+  const correct=(Sa.k.answers[ci]||'').trim();
+  const distractors=Sa.k.answers.filter((_,i)=>i!==ci).map(x=>(x||'').trim());
+  if(!stem){ toast('請輸入題目'); return; }
+  if(!correct){ toast(`請填寫「答案 ${ci+1}」（目前圈選的正解格是空的）`); return; }
+  if(distractors.some(x=>!x)){ toast('4 個答案格都要填寫'); return; }
+  const payload={ stem, correct, distractors, explain:(Sa.k.explain||'').trim(), quiz_note:(Sa.k.quizNote||'').trim() };
+  try{
+    if(Sa.k.qid){ await DB.updateQuestion(Sa.k.qid, payload); toast('題目已更新'); }
+    else { await DB.addQuestion({ quiz_id:Sa.editQuiz, ...payload }); toast('題目已加入'); }
+    resetK(); render();
+  }catch(e){ toast('儲存失敗：'+e.message); }
+}
+async function delQ(id){ if(!confirm('確定刪除此題？'))return; try{ await DB.delQuestion(id); toast('已刪除'); render(); }catch(e){ toast('刪除失敗：'+e.message); } }
+
+/* =====================================================================
+   帳號（目前唯讀清單；新增/刪除帳號將由 admin-create-user Edge Function 提供）
+   ===================================================================== */
+function viewUsers(){
+  const list=Sa.profiles||[];
+  return `
+  <div class="admin-hint">💡 在這裡建立員工帳號。員工用<b>員工編號（H+4碼）+ 密碼</b>登入；預設密碼由你設定，員工<b>首次登入會被要求改成自己的密碼</b>。忘記密碼時由你在此重設。</div>
+  <div class="cols2">
+    <div class="card">
+      <div class="card-h">👤 新增帳號</div>
+      <label class="fld">員工編號（H + 4 碼，例：H0002）</label>
+      <input id="nu_id" placeholder="H0002" maxlength="5" oninput="this.value=this.value.toUpperCase()">
+      <label class="fld">姓名</label>
+      <input id="nu_name" placeholder="輸入員工姓名">
+      <label class="fld">角色</label>
+      <div class="chips" id="nu_role">
+        ${ROLES.map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="radio" name="nurole" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
+      </div>
+      <label class="fld">預設密碼（至少 6 碼）</label>
+      <input id="nu_pw" placeholder="例如 care1234">
+      <button class="btn block" style="margin-top:16px" id="nu_btn" onclick="createStaff()">建立帳號</button>
+    </div>
+    <div class="card">
+      <div class="card-h">所有帳號（${list.length}）</div>
+      ${list.map(x=>{ const r=roleOf(x.role); const isSelf = Auth.profile() && x.id===Auth.profile().id;
+        return `<div class="row-item">
+          <span class="avatar" style="background:${r.color};width:40px;height:40px">${esc(initials(x.name))}</span>
+          <div class="row-body"><div class="t">${esc(x.name)} <span class="tag">${esc(x.employee_id)}</span>${isSelf?' <span class="tag teal">你</span>':''}</div>
+            <div class="s">${roleName(x.role)} · ${x.points}分 · ✅${x.answered}題${x.must_change_password?' · 🔑待改密碼':''}</div></div>
+          <div class="rowbtns">
+            <button class="btn sec sm" onclick="resetStaffPw('${x.id}','${esc(x.employee_id)}')">重設密碼</button>
+            ${isSelf?'':`<button class="btn danger sm" onclick="deleteStaff('${x.id}','${esc(x.name)}')">刪除</button>`}
+          </div>
+        </div>`; }).join('') || '<div class="empty">尚無帳號</div>'}
+    </div>
+  </div>`;
+}
+async function createStaff(){
+  const employeeId=(document.getElementById('nu_id').value||'').trim().toUpperCase();
+  const name=(document.getElementById('nu_name').value||'').trim();
+  const role=(document.querySelector('#nu_role input:checked')||{}).value;
+  const password=document.getElementById('nu_pw').value||'';
+  if(!/^H\d{4}$/.test(employeeId)){ toast('員工編號須為 H + 4 碼數字'); return; }
+  if(!name){ toast('請輸入姓名'); return; }
+  if(!role){ toast('請選擇角色'); return; }
+  if(password.length<6){ toast('預設密碼至少 6 碼'); return; }
+  const btn=document.getElementById('nu_btn'); btn.disabled=true; btn.textContent='建立中…';
+  try{
+    await adminUsers('create', { employeeId, name, role, password });
+    Sa.profiles=await DB.allProfiles();
+    toast(`已建立 ${employeeId}`); render();
+  }catch(e){ toast('❌ '+e.message); btn.disabled=false; btn.textContent='建立帳號'; }
+}
+async function resetStaffPw(userId, empId){
+  const pw=prompt(`為 ${empId} 設定新的預設密碼（至少 6 碼）。員工下次登入會被要求再改成自己的密碼。`);
+  if(pw===null) return;
+  if(pw.length<6){ toast('密碼至少 6 碼'); return; }
+  try{ await adminUsers('reset', { userId, password:pw }); toast('密碼已重設'); }
+  catch(e){ toast('❌ '+e.message); }
+}
+async function deleteStaff(userId, name){
+  if(!confirm(`確定刪除帳號「${name}」？此動作無法復原，該員工的作答紀錄也會一併刪除。`)) return;
+  try{ await adminUsers('delete', { userId }); Sa.profiles=await DB.allProfiles(); toast('已刪除'); render(); }
+  catch(e){ toast('❌ '+e.message); }
+}
+
+/* =====================================================================
+   題目編輯器的 AI 按鈕
+   ===================================================================== */
+async function genKahootAI(){
+  const ci=Sa.k.correctIdx, correct=(Sa.k.answers[ci]||'').trim();
+  if(!correct){ toast('請先在正解那一格輸入答案，並圈選為正解'); return; }
+  toast('🤖 AI 生成干擾項中…');
+  try{
+    const d=await aiDistractors(Sa.k.stem, correct); let di=0;
+    for(let i=0;i<4;i++){ if(i!==ci) Sa.k.answers[i]=d[di++]||''; }
+    render(); toast('已生成，請審核');
+  }catch(e){ toast('❌ '+e.message.slice(0,100)); }
+}
+async function genExplainKahoot(){
+  const ci=Sa.k.correctIdx, correct=(Sa.k.answers[ci]||'').trim(), stem=(Sa.k.stem||'').trim();
+  if(!stem){ toast('請先輸入題目'); return; }
+  if(!correct){ toast('請先填正解那一格並圈選'); return; }
+  toast('🤖 生成教學解說中…');
+  try{
+    Sa.k.explain=await aiExplain(stem, correct, Sa.k.answers.filter((_,i)=>i!==ci));
+    render(); toast('已生成教學解說，可再修改');
+  }catch(e){ toast('❌ '+e.message.slice(0,100)); }
+}
+
+/* =====================================================================
+   AI 匯入出題
+   ===================================================================== */
 function viewImport(){
   return `
-  <div class="admin-hint">${AI.enabled()?'✅ 已啟用 <b>Google AI</b> 生成。':'⚠️ 尚未設定 AI 金鑰，目前用<b>本機規則</b>生成（品質較陽春）。到 <b>⚙️ AI 設定</b> 分頁貼上金鑰即可啟用真 AI。'}</div>
-  <div class="admin-hint">💡 上傳教材或貼上內容 → AI 生成題目草稿 → 逐題微調 → 確認才加入題庫。</div>
+  <div class="admin-hint">💡 上傳教材或貼上內容 → AI 生成題目草稿 → 逐題微調 → 確認才加入題庫。AI 於後端執行，金鑰安全。</div>
   <div class="card">
     <div class="card-h">📄 上傳教材，自動生成題目</div>
-    <div class="note" style="margin:0 0 12px">支援 <b>Word(.docx)、Excel(.xlsx)、.txt / .md / .csv</b>，或直接貼上內容。<br>💡 Excel 若用「第一欄=題目、第二欄=答案」，會自動整理成「題目：答案」最好出題。（PDF 目前需之後接後端）</div>
+    <div class="note" style="margin:0 0 12px">支援 <b>Word(.docx)、Excel(.xlsx)、.txt / .md / .csv</b>，或直接貼上內容。<br>💡 Excel 若用「第一欄=題目、第二欄=答案」，會自動整理成「題目：答案」最好出題。</div>
     <input type="file" multiple accept=".txt,.md,.csv,.tsv,.docx,.xlsx" onchange="handleFiles(this)">
     <label class="fld">教材內容（可貼上，或由上傳檔案自動帶入）</label>
     <textarea id="imp_text" style="min-height:140px" placeholder="貼上教材文字…（例如：洗手五時機為接觸病人前、清潔前…）" oninput="Sa.material=this.value">${esc(Sa.material)}</textarea>
@@ -136,35 +336,6 @@ function viewImport(){
     </div>
   </div>
   ${draftsHTML()}`;
-}
-function aiSettingsCard(){
-  const c=AI.get(), on=!!c.key;
-  return `<div class="card">
-    <div class="card-h">🤖 AI 設定（Google Gemini／Gemma · 免費）</div>
-    <div class="note" style="margin:0 0 10px">
-      狀態：${on?'<b style="color:var(--good)">● 已啟用</b>':'<b class="muted">○ 未設定（目前用本機生成）</b>'}
-      ・免費金鑰申請：<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener" style="color:var(--brand-dk);font-weight:800">aistudio.google.com/apikey</a>
-    </div>
-    <label class="fld">API 金鑰（只存在你這台瀏覽器，不會上傳）</label>
-    <input id="ai_key" type="password" placeholder="貼上 Google AI Studio 金鑰（AIza…）" value="${esc(c.key||'')}">
-    <label class="fld">模型</label>
-    <div class="note" style="margin:6px 0 0;font-size:14px"><b style="color:var(--brand-dk)">${AI.model()}</b>（已固定）</div>
-    <div class="inline" style="margin-top:12px">
-      <button class="btn sec" style="flex:1" onclick="testAi()">測試連線</button>
-      <button class="btn" style="flex:1" onclick="saveAi()">儲存設定</button>
-      ${on?`<button class="btn ghost" onclick="clearAi()">清除</button>`:''}
-    </div>
-    <div class="note">⚠️ 靜態網站的臨時做法：金鑰存在你的瀏覽器（別人用同一台電腦、或在開發者工具都可能看到）。<b>請勿把金鑰寫進程式或上傳到 GitHub。</b>建議到 Google Cloud 把金鑰限制網域使用。正式上線改用後端保管最安全。</div>
-  </div>`;
-}
-function saveAi(){ AI.set({ key:document.getElementById('ai_key').value.trim() }); toast('AI 設定已儲存'); render(); }
-function clearAi(){ if(!confirm('清除已儲存的金鑰？'))return; AI.set({}); toast('已清除'); render(); }
-async function testAi(){
-  const key=document.getElementById('ai_key').value.trim();
-  if(!key){ toast('請先貼上金鑰'); return; }
-  AI.set({key}); toast('測試中…');
-  try{ const t=await AI.call('請只回覆 JSON：{"ok":"成功"}'); toast('✅ 連線成功 '+(t||'').slice(0,30)); render(); }
-  catch(e){ toast('❌ '+e.message.slice(0,90)); }
 }
 async function handleFiles(input){
   const files=[...input.files]; if(!files.length) return;
@@ -180,16 +351,17 @@ async function handleFiles(input){
 async function genFromMaterial(){
   const text=(Sa.material||'').trim();
   if(text.length<10){ toast('請先貼上或上傳教材內容'); return; }
-  toast(AI.enabled()?'🤖 AI 出題中…（可能需幾秒）':'本機生成中…');
+  toast('🤖 AI 出題中…（可能需幾秒）');
   try{
     const drafts=await aiQuestionsFromText(text, Sa.impN||5);
     if(!drafts.length){ toast('沒有生成題目，請調整教材內容'); return; }
     Sa.drafts=drafts; if(!Sa.draftQuiz) Sa.draftQuiz=DB.quizzes()[0]&&DB.quizzes()[0].id;
     render(); toast(`已生成 ${drafts.length} 題草稿，請審核`);
-  }catch(e){ toast('❌ '+e.message.slice(0,90)); }
+  }catch(e){ toast('❌ '+e.message.slice(0,100)); }
 }
 function draftsHTML(){
   if(!Sa.drafts.length) return '';
+  if(!DB.quizzes().length) return `<div class="admin-hint" style="margin-top:14px">⚠️ 請先到「測驗管理」建立測驗，草稿才有地方加入。</div>`;
   return `<div class="sect">題目草稿（${Sa.drafts.length}）· 編輯後加入</div>
     <div class="card">
       <label class="fld" style="margin-top:0">草稿要加入哪個測驗</label>
@@ -211,7 +383,7 @@ function draftCard(d,i){
       <input value="${esc(d.distractors[1]||'')}" oninput="Sa.drafts[${i}].distractors[1]=this.value" style="flex:1;min-width:100px">
       <input value="${esc(d.distractors[2]||'')}" oninput="Sa.drafts[${i}].distractors[2]=this.value" style="flex:1;min-width:100px">
     </div>
-    <label class="fld">教學解說（用於學習模式）</label>
+    <label class="fld">📇 字卡詳細解說</label>
     <textarea oninput="Sa.drafts[${i}].explain=this.value">${esc(d.explain||'')}</textarea>
     <button class="btn sec block" style="margin-top:8px" onclick="genDraftExplain(${i})">🤖 生成教學解說（依本題內容）</button>
     <div class="inline" style="margin-top:12px">
@@ -224,189 +396,71 @@ async function genDraftExplain(i){
   const d=Sa.drafts[i]; if(!d) return;
   const stem=(d.stem||'').trim(), correct=(d.correct||'').trim();
   if(!stem||!correct){ toast('請先填題幹與正解'); return; }
-  toast(AI.enabled()?'🤖 生成教學解說中…':'產生中…');
+  toast('🤖 生成教學解說中…');
   try{ Sa.drafts[i].explain=await aiExplain(stem, correct, d.distractors); render(); toast('已生成教學解說，可再修改'); }
-  catch(e){ toast('❌ '+e.message.slice(0,90)); }
+  catch(e){ toast('❌ '+e.message.slice(0,100)); }
 }
-function _draftValid(d){ const ds=d.distractors.map(x=>(x||'').trim()).filter(Boolean); return d.stem.trim()&&d.correct.trim()&&ds.length>=3; }
-function addDraft(i){
-  const d=Sa.drafts[i], quizId=Sa.draftQuiz||(DB.quizzes()[0]&&DB.quizzes()[0].id);
-  if(!quizId){ toast('請先建立測驗'); return; }
+function _draftValid(d){ const ds=(d.distractors||[]).map(x=>(x||'').trim()).filter(Boolean); return d.stem.trim()&&d.correct.trim()&&ds.length>=3; }
+async function addDraft(i){
+  const d=Sa.drafts[i], quiz_id=Sa.draftQuiz||(DB.quizzes()[0]&&DB.quizzes()[0].id);
+  if(!quiz_id){ toast('請先建立測驗'); return; }
   if(!_draftValid(d)){ toast('題幹、正解與 3 個干擾項為必填'); return; }
-  DB.addQuestion({ quizId, stem:d.stem.trim(), correct:d.correct.trim(),
-    distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim() });
-  Sa.drafts.splice(i,1); toast('已加入題庫'); render();
+  try{
+    await DB.addQuestion({ quiz_id, stem:d.stem.trim(), correct:d.correct.trim(),
+      distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim(), quiz_note:'' });
+    Sa.drafts.splice(i,1); toast('已加入題庫'); render();
+  }catch(e){ toast('加入失敗：'+e.message); }
 }
-function addAllDrafts(){
-  const quizId=Sa.draftQuiz||(DB.quizzes()[0]&&DB.quizzes()[0].id);
-  if(!quizId){ toast('請先建立測驗'); return; }
+async function addAllDrafts(){
+  const quiz_id=Sa.draftQuiz||(DB.quizzes()[0]&&DB.quizzes()[0].id);
+  if(!quiz_id){ toast('請先建立測驗'); return; }
   let added=0; const keep=[];
-  Sa.drafts.forEach(d=>{
-    if(_draftValid(d)){ DB.addQuestion({ quizId, stem:d.stem.trim(), correct:d.correct.trim(),
-      distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim() }); added++; }
-    else keep.push(d);
-  });
+  for(const d of Sa.drafts){
+    if(_draftValid(d)){
+      try{ await DB.addQuestion({ quiz_id, stem:d.stem.trim(), correct:d.correct.trim(),
+        distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim(), quiz_note:'' }); added++; }
+      catch(e){ keep.push(d); }
+    } else keep.push(d);
+  }
   Sa.drafts=keep; toast(`已加入 ${added} 題${keep.length?`，${keep.length} 題資料不全保留`:''}`); render();
 }
 function discardDraft(i){ Sa.drafts.splice(i,1); render(); }
 
 /* =====================================================================
-   題目 —— 先選測驗，再用 Kahoot 式介面出題
+   AI 設定（連線測試；金鑰保管於 Edge Function 後端）
    ===================================================================== */
-const KT=[
-  { cls:'kt-red',    shape:'▲' },
-  { cls:'kt-blue',   shape:'◆' },
-  { cls:'kt-yellow', shape:'●' },
-  { cls:'kt-green',  shape:'■' },
-];
-function viewQuestions(){
-  if(!DB.quizzes().length) return `<div class="admin-hint">請先到「測驗管理」建立至少一個測驗，才能出題。</div>`;
-  if(Sa.editQuiz && !DB.quiz(Sa.editQuiz)) Sa.editQuiz=null;   // 測驗已被刪除
-  return Sa.editQuiz ? viewQuizEditor() : viewQuizPicker();
-}
-
-/* 步驟一：所有測驗一覽，選一個進去出題 */
-function viewQuizPicker(){
+function viewSettings(){
   return `
-  <div class="admin-hint">💡 先選擇一份測驗，再進去新增題目。點「出題」進入 Kahoot 式編輯畫面。</div>
+  <div class="admin-hint">💡 AI 由 <b>Supabase Edge Function（ai-generate）</b> 於後端呼叫 Gemini，金鑰（GEMINI_API_KEY）只存在伺服器密鑰，前端與程式碼都看不到。</div>
   <div class="card">
-    <div class="card-h">📋 選擇要出題的測驗</div>
-    ${DB.quizzes().map(q=>{ const n=DB.questionsOf(q.id).length;
-      return `<div class="row-item">
-        <div class="thumb">${q.emoji||'📘'}</div>
-        <div class="row-body"><div class="t">${esc(q.title)}</div>
-          <div class="s">${esc(q.desc||'')} · ${n} 題</div>
-          <div class="tags">${q.roles.map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</div></div>
-        <button class="btn sm" onclick="openQuizEditor('${q.id}')">出題 →</button>
-      </div>`; }).join('')}
+    <div class="card-h">🤖 AI 連線測試</div>
+    <div class="note" style="margin:0 0 12px">按下方按鈕會請後端呼叫一次 Gemini，確認函式已部署、金鑰已設定且有效。</div>
+    <button class="btn block" onclick="testAi(this)">測試 AI 連線</button>
+    <div id="ai_test_result" style="margin-top:12px"></div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div class="card-h">設定步驟</div>
+    <ol class="note" style="margin:0;padding-left:18px;line-height:2">
+      <li>Supabase → <b>Edge Functions</b> → 部署名為 <code>ai-generate</code> 的函式。</li>
+      <li>Edge Functions → <b>Secrets</b> → 新增 <code>GEMINI_API_KEY</code>（Google AI Studio 免費金鑰）。</li>
+      <li>（選用）<code>GEMINI_MODEL</code> 指定模型，預設 <code>gemini-3.5-flash</code>。</li>
+    </ol>
   </div>`;
 }
-function openQuizEditor(id){ Sa.editQuiz=id; resetK(); window.scrollTo(0,0); render(); }
-function backToPicker(){ Sa.editQuiz=null; resetK(); render(); }
-
-/* 步驟二：Kahoot 式出題 + 該測驗現有題目 */
-function viewQuizEditor(){
-  const quiz=DB.quiz(Sa.editQuiz), list=DB.questionsOf(quiz.id), editing=!!Sa.k.qid;
-  return `
-  <div class="crumb">
-    <button class="back" onclick="backToPicker()">← 所有測驗</button>
-    <span class="cur">${quiz.emoji||'📘'} ${esc(quiz.title)}</span>
-    <span class="tags">${quiz.roles.map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</span>
-  </div>
-
-  <div class="card">
-    <div class="card-h">${editing?'✏️ 編輯題目':'➕ 新增題目'}</div>
-    <textarea class="k-stem" placeholder="在這裡輸入題目…" oninput="Sa.k.stem=this.value">${esc(Sa.k.stem)}</textarea>
-    <div class="ktiles">
-      ${KT.map((t,i)=>`<div class="ktile ${t.cls} ${Sa.k.correctIdx===i?'correct':''}">
-        <span class="shape">${t.shape}</span>
-        <input placeholder="輸入答案 ${i+1}" value="${esc(Sa.k.answers[i]||'')}" oninput="Sa.k.answers[${i}]=this.value">
-        <button class="mark" title="設為正確答案" onclick="setCorrect(${i})">${Sa.k.correctIdx===i?'✓':''}</button>
-      </div>`).join('')}
-    </div>
-    <div class="k-correcthint">點右側 ⭘ 圈選哪一個是<b>正確答案</b>（目前：答案 ${Sa.k.correctIdx+1}）。作答時選項順序會自動隨機。</div>
-    <label class="fld">教學解說（用於學習模式的「先學後測」）</label>
-    <textarea placeholder="說明正確答案的觀念、易混淆的重點…（可按下方按鈕用 AI 生成）" oninput="Sa.k.explain=this.value">${esc(Sa.k.explain)}</textarea>
-    <button class="btn sec block" style="margin-top:8px" onclick="genExplainKahoot()">🤖 生成教學解說（依本題內容）</button>
-    <button class="btn amber block" style="margin-top:12px" onclick="genKahootAI()">🤖 AI 依正解生成其餘 3 個錯誤答案</button>
-    <div class="inline" style="margin-top:10px">
-      ${editing?`<button class="btn ghost" style="flex:1" onclick="cancelEdit()">取消編輯</button>`:''}
-      <button class="btn" style="flex:2" onclick="saveKahoot()">${editing?'更新題目':'加入此測驗'}</button>
-    </div>
-  </div>
-
-  <div class="sect">此測驗的題目（${list.length}）</div>
-  ${list.length? list.map(q=>{
-    const opts=[q.correct,...q.distractors];
-    return `<div class="qcard">
-      <div class="qh"><p class="stem">${esc(q.stem)}</p>
-        <div class="rowbtns">
-          <button class="btn sec sm" onclick="editQuestion('${q.id}')">編輯</button>
-          <button class="btn danger sm" onclick="delQ('${q.id}')">刪除</button>
-        </div></div>
-      <div class="qopts">${opts.map((o,i)=>`<span class="qo ${i===0?'ok':''}">${i===0?'✓ ':''}${esc(o)}</span>`).join('')}</div>
-    </div>`; }).join('') : '<div class="empty">此測驗還沒有題目，用上方表單新增第一題吧！</div>'}
-  `;
-}
-function setCorrect(i){ Sa.k.correctIdx=i; render(); }
-async function genKahootAI(){
-  const ci=Sa.k.correctIdx, correct=(Sa.k.answers[ci]||'').trim();
-  if(!correct){ toast('請先在正解那一格輸入答案，並圈選為正解'); return; }
-  toast(AI.enabled()?'🤖 AI 生成中…':'本機生成中…');
+async function testAi(btn){
+  const box=document.getElementById('ai_test_result');
+  if(btn){ btn.disabled=true; btn.textContent='測試中…'; }
+  box.innerHTML='<div class="note">🤖 呼叫後端中…</div>';
   try{
-    const d=await aiDistractors(Sa.k.stem, correct); let di=0;
-    for(let i=0;i<4;i++){ if(i!==ci) Sa.k.answers[i]=d[di++]||''; }
-    render(); toast('已生成，請審核');
-  }catch(e){ toast('❌ '+e.message.slice(0,90)); }
+    const r=await aiPing();
+    box.innerHTML=`<div class="fb g">✅ 連線成功（模型：${esc(r.model||'')}）<br>${esc(r.sample||'')}</div>`;
+  }catch(e){
+    box.innerHTML=`<div class="fb b">❌ ${esc(e.message)}<br><span class="muted">請確認 ai-generate 已部署、GEMINI_API_KEY 已設定。</span></div>`;
+  }finally{ if(btn){ btn.disabled=false; btn.textContent='測試 AI 連線'; } }
 }
-async function genExplainKahoot(){
-  const ci=Sa.k.correctIdx, correct=(Sa.k.answers[ci]||'').trim(), stem=(Sa.k.stem||'').trim();
-  if(!stem){ toast('請先輸入題目'); return; }
-  if(!correct){ toast('請先填正解那一格並圈選'); return; }
-  toast(AI.enabled()?'🤖 生成教學解說中…':'產生中…');
-  try{
-    Sa.k.explain=await aiExplain(stem, correct, Sa.k.answers.filter((_,i)=>i!==ci));
-    render(); toast('已生成教學解說，可再修改');
-  }catch(e){ toast('❌ '+e.message.slice(0,90)); }
-}
-function editQuestion(id){
-  const q=DB.question(id); if(!q) return;
-  Sa.k={ qid:q.id, stem:q.stem, answers:[q.correct, ...q.distractors].slice(0,4), correctIdx:0, explain:q.explain||'' };
-  window.scrollTo(0,0); render();
-}
-function cancelEdit(){ resetK(); render(); }
-function saveKahoot(){
-  const stem=(Sa.k.stem||'').trim(), ci=Sa.k.correctIdx;
-  const correct=(Sa.k.answers[ci]||'').trim();
-  const distractors=Sa.k.answers.filter((_,i)=>i!==ci).map(x=>(x||'').trim());
-  if(!stem){ toast('請輸入題目'); return; }
-  if(!correct){ toast(`請填寫「答案 ${ci+1}」（目前圈選的正解格是空的）`); return; }
-  if(distractors.some(x=>!x)){ toast('4 個答案格都要填寫'); return; }
-  if(Sa.k.qid){ DB.updateQuestion(Sa.k.qid, {stem, correct, distractors, explain:(Sa.k.explain||'').trim()}); toast('題目已更新'); }
-  else { DB.addQuestion({ quizId:Sa.editQuiz, stem, correct, distractors, explain:(Sa.k.explain||'').trim() }); toast('題目已加入'); }
-  resetK(); render();
-}
-function delQ(id){ if(!confirm('確定刪除此題？'))return; DB.delQuestion(id); toast('已刪除'); render(); }
-
-/* =====================================================================
-   帳號管理
-   ===================================================================== */
-function viewUsers(){
-  return `
-  <div class="admin-hint">💡 員工帳號在這裡建立，前台登入頁才會出現。角色決定他能看到哪些測驗。</div>
-  <div class="cols2">
-    <div class="card">
-      <div class="card-h">👤 新增帳號</div>
-      <label class="fld">姓名</label>
-      <input id="nu_name" placeholder="輸入員工姓名">
-      <label class="fld">角色</label>
-      <div class="chips" id="nu_role">
-        ${ROLES.map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="radio" name="nurole" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
-      </div>
-      <button class="btn block" style="margin-top:16px" onclick="createUser()">建立帳號</button>
-    </div>
-    <div class="card">
-      <div class="card-h">所有帳號（${DB.users().length}）</div>
-      ${DB.users().map(x=>{ const r=roleOf(x.role);
-        return `<div class="row-item">
-          <span class="avatar" style="background:${r.color};width:40px;height:40px">${esc(initials(x.name))}</span>
-          <div class="row-body"><div class="t">${esc(x.name)}</div><div class="s">${roleName(x.role)} · ${x.points}分 · ✅${x.answered}題</div></div>
-          ${x.id==='admin'?'<span class="tag">系統</span>':`<button class="btn danger sm" onclick="delUser('${x.id}')">刪除</button>`}
-        </div>`; }).join('')}
-    </div>
-  </div>`;
-}
-function createUser(){
-  const name=document.getElementById('nu_name').value.trim();
-  const role=(document.querySelector('#nu_role input:checked')||{}).value;
-  if(!name){ toast('請輸入姓名'); return; }
-  if(!role){ toast('請選擇角色'); return; }
-  DB.addUser(name,role); toast('帳號已建立'); render();
-}
-function delUser(id){ if(!confirm('確定刪除此帳號？'))return; DB.delUser(id); toast('已刪除'); render(); }
 
 /* ---------- 啟動 ---------- */
-render();
+boot();
 </script>
 </body>
 </html>

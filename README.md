@@ -1,31 +1,38 @@
 # 照護學堂 · 線上測驗平台
 
 養老院內部使用的線上測驗與學習平台，供照服員、社工、護理師等員工在職教育使用。
-純靜態網站（HTML / CSS / JS），無需後端即可執行，資料暫存於瀏覽器 localStorage。
+前端為純靜態網站（HTML / CSS / JS），部署於 **GitHub Pages**；資料與驗證由 **Supabase**（Postgres + Auth + Edge Functions）提供，多人、多裝置即時同步。
 
 ## 功能
 
-- **前台（員工）** `index.html`：登入、作答、學習模式（先學後測）、間隔複習（SRS）、積分／連續天數／徽章／排行榜
-  - 練習模式：🎲 隨機綜合、🎯 自訂單元、🔧 加強弱點（常錯題）
-- **題庫後台** `admin.html`：測驗管理、Kahoot 式出題、AI 匯入教材出題、帳號管理、AI 設定
-  - 角色分權：測驗可設定開放對象，護理專屬題目照服員看不到
-  - AI 自動生成干擾選項與教學解說（Google Gemini）
-  - 支援上傳 Word(.docx) / Excel(.xlsx) / txt / csv 教材自動出題
-- **主管報表** `report.html`：完成度、分數趨勢、角色比較、題目難度分析、各式明細表
+- **前台（員工）** `index.html`：員工編號（H####）+ 密碼登入、首次登入強制改密碼、字卡學習、線上測驗、間隔複習（SRS）、積分／連續天數／徽章／排行榜
+- **題庫後台** `admin.html`（限管理員）：測驗管理、Kahoot 式出題、AI 匯入教材出題、AI 生成干擾項／解說、帳號管理（新增／重設密碼／刪除）
+  - 角色分權（RLS）：測驗可設定開放對象，護理專屬題目照服員看不到
+- **主管報表** `report.html`（限管理員）：完成度、分數趨勢、角色比較、題目難度、作答明細（含裝置代碼供異常比對）
+
+## 安全設計重點
+
+- **測驗答案金鑰不外流**：作答時前端只拿到 `questions_public`（無正解）；評分在 Edge Function `quiz` 後端進行，成績由伺服器計算寫入，**無法偽造**。
+- **字卡**為公開學習區（顯示正解與詳解），與測驗分離。
+- **AI 金鑰**（Gemini）只存在 Supabase Edge Function 密鑰，前端與 repo 都看不到。
+- **Row Level Security**：員工只讀寫自己的資料；管理員可管理全部。
 
 ## 檔案結構
 
 | 檔案 | 說明 |
 |------|------|
-| `index.html` | 前台（員工作答） |
-| `admin.html` | 題庫管理後台 |
-| `report.html` | 主管報表 |
-| `db.js` | 共用資料層（DB、AI 呼叫、檔案解析）— 三個頁面共用 |
+| `index.html` | 前台（員工作答／字卡／複習／排行） |
+| `admin.html` | 題庫管理後台（限管理員） |
+| `report.html` | 主管報表（限管理員） |
+| `supabase-client.js` | Supabase 用戶端 + 驗證層（Auth） |
+| `db.js` | 共用資料層（快取、Edge Function 呼叫、檔案解析） |
 | `styles.css` | 共用樣式 |
+| `supabase/01–07_*.sql` | 資料庫 schema、RLS、view、修補（依序執行） |
+| `supabase/functions/ai-generate/` | Edge Function：AI 出題／干擾項／解說（Gemini 代理） |
+| `supabase/functions/quiz/` | Edge Function：伺服器端評分（grade / finish） |
+| `supabase/functions/admin-users/` | Edge Function：帳號建立／重設密碼／刪除 |
 
 ## 本機執行
-
-因使用共用 `db.js`，建議用簡易伺服器開啟（而非直接雙擊）：
 
 ```bash
 python -m http.server 5500
@@ -33,21 +40,16 @@ python -m http.server 5500
 
 然後瀏覽 http://localhost:5500/index.html
 
-## AI 設定（選用）
+## 首次建置（Supabase）
 
-出題與教學解說可用 Google Gemini 生成：
-
-1. 到 https://aistudio.google.com/apikey 申請免費 API 金鑰
-2. 後台 → ⚙️ AI 設定 → 貼上金鑰 → 測試連線 → 儲存
-
-> ⚠️ **金鑰只存在你的瀏覽器（localStorage），絕不會、也不應寫進程式碼或提交到本 repo。**
-> 未設定金鑰時，系統會退回本機規則生成，功能仍可用。
+1. 建立 Supabase 專案，取得 **Project URL** 與 **publishable 金鑰**，填入 `supabase-client.js`。
+2. SQL Editor 依序執行 `supabase/01_schema.sql` … `07_*.sql`。
+3. Authentication → 關閉「Confirm email」。
+4. 建立第一個管理員：Authentication → Users 新增 `h####@clinic.local`，再用 `02_bootstrap_admin.sql` 設為 admin。
+5. 部署三個 Edge Function（Dashboard → Edge Functions → Open Editor → 貼上 `supabase/functions/*/index.ts` → Deploy）。
+6. Edge Functions → Secrets 新增 `GEMINI_API_KEY`（Google AI Studio 免費金鑰）。（選用 `GEMINI_MODEL`，預設 `gemini-3.5-flash`。）
 
 ## 部署（GitHub Pages）
 
 Settings → Pages → Source 選 `main` 分支 `/ (root)`，即可取得公開網址。
-
-## 後續規劃
-
-- 改用 Supabase 作為共用資料庫（多人、多裝置同步）
-- AI 金鑰改由 Supabase Edge Function 於後端保管（前端不接觸金鑰）
+publishable 金鑰放前端是安全的（由 RLS 保護資料）；**service_role／Gemini 金鑰絕不放 repo**。

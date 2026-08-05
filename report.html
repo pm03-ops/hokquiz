@@ -4,118 +4,145 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-<meta http-equiv="Pragma" content="no-cache" />
-<meta http-equiv="Expires" content="0" />
 <title>照護學堂 · 主管報表</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=7">
+<link rel="stylesheet" href="styles.css?v=8">
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div class="shell wide"><div class="content"><div class="note center" style="padding:60px">載入中…</div></div></div></div>
 <div id="toast-host"></div>
 
-<script src="db.js?v=7"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-client.js?v=9"></script>
+<script src="db.js?v=9"></script>
 <script>
 /* =====================================================================
-   主管報表 report.html —— 測驗情形 / 完成度 / 分數趨勢 / 各式分析表
-   唯讀：只讀取共用資料庫（db.js），不修改題庫。
+   主管報表 report.html —— 唯讀：完成度 / 分數趨勢 / 角色比較 / 題目難度…
+   資料來自 Supabase（管理員權限一次載入）。僅限 role=admin。
    圖表全部用內建 SVG / CSS，無外部函式庫。
    ===================================================================== */
-
-const Sr = { tab:'overview', range:30 };  // range: 天數篩選
+const Sr = { tab:'overview', range:30 };
+const DAY = 86400000;
 const root=()=>document.getElementById('root');
-const DAY=86400000;
 
-/* 角色系列色（CVD 安全，並輔以文字標籤） */
+/* 載入的資料 */
+const RR = { profiles:[], attempts:[], answers:[], quizzes:[], questions:[] };
+const toMs = s => s ? new Date(s).getTime() : 0;
+
+/* 色彩 */
 const ROLE_SERIES = { care:'#2a78d6', social:'#eb6834', nurse:'#1baf7a' };
 const BRAND='#0f9d8f';
 
-/* ---------- 分析工具 ---------- */
-const staff = () => DB.users().filter(u=>u.role!=='admin');
+/* ---------- 啟動：驗證管理員 + 載入資料 ---------- */
+async function boot(){
+  const s=await Auth.session();
+  if(!s){ location.href='index.html'; return; }
+  await Auth.loadProfile();
+  if(!Auth.isAdmin()){
+    root().innerHTML=`<div class="shell wide"><div class="content"><div class="card center" style="padding:50px 22px">
+      <div class="big-emoji">🔒</div><h3 style="margin:12px 0">此頁僅限管理員</h3>
+      <a class="btn" style="margin-top:18px" href="index.html">↩ 回前台</a></div></div></div>`;
+    return;
+  }
+  try{
+    const [p,at,an,qz,qs] = await Promise.all([
+      sb.from('profiles').select('*'),
+      sb.from('attempts').select('*'),
+      sb.from('answers').select('*'),
+      sb.from('quizzes').select('*'),
+      sb.from('questions').select('id, quiz_id, stem'),
+    ]);
+    const err=[p,at,an,qz,qs].find(r=>r.error); if(err) throw err.error;
+    RR.profiles=p.data||[]; RR.attempts=at.data||[]; RR.answers=an.data||[];
+    RR.quizzes=qz.data||[]; RR.questions=qs.data||[];
+  }catch(e){ toast('載入失敗：'+e.message); }
+  render();
+}
+
+/* ---------- 資料存取 ---------- */
+const staff = () => RR.profiles.filter(u=>u.role!=='admin');
 const staffRoles = () => ['care','social','nurse'];
+const quizById = id => RR.quizzes.find(q=>q.id===id);
+const userById = id => RR.profiles.find(u=>u.id===id);
+const questionsOf = qid => RR.questions.filter(q=>q.quiz_id===qid);
 function within(ts){ return (Date.now()-ts) <= Sr.range*DAY; }
-function ansAll(){ return DB.answers().filter(a=>within(a.at)); }
-function attAll(){ return DB.attempts().filter(a=>within(a.at)); }
+const staffIdSet = () => new Set(staff().map(u=>u.id));  // 排除管理員（不列入報表統計）
+function ansAll(){ const ids=staffIdSet(); return RR.answers.filter(a=>ids.has(a.user_id) && within(toMs(a.at))); }
+function attAll(){ const ids=staffIdSet(); return RR.attempts.filter(a=>ids.has(a.user_id) && within(toMs(a.at))); }
 function acc(list){ if(!list.length) return null; return Math.round(list.filter(a=>a.correct).length/list.length*100); }
 function fmtDate(ts){ const d=new Date(ts); return `${d.getMonth()+1}/${d.getDate()}`; }
 function fmtDateTime(ts){ const d=new Date(ts); const p=n=>String(n).padStart(2,'0'); return `${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`; }
 
-/* 每份測驗的完成度 */
+/* 每份測驗完成度 */
 function quizStats(){
-  return DB.quizzes().map(q=>{
-    const eligible = staff().filter(u=>q.roles.includes(u.role));
-    const atts = attAll().filter(a=>a.quizId===q.id);
-    const completedIds = new Set(atts.map(a=>a.userId));
-    const ans = ansAll().filter(a=>a.quizId===q.id);
-    return {
-      quiz:q, questions:DB.questionsOf(q.id).length,
+  return RR.quizzes.map(q=>{
+    const eligible = staff().filter(u=>(q.roles||[]).includes(u.role));
+    const atts = attAll().filter(a=>a.quiz_id===q.id);
+    const completedIds = new Set(atts.map(a=>a.user_id));
+    const ans = ansAll().filter(a=>a.quiz_id===q.id);
+    return { quiz:q, questions:questionsOf(q.id).length,
       eligible:eligible.length, completed:completedIds.size,
       completion: eligible.length? Math.round(completedIds.size/eligible.length*100):0,
-      attempts:atts.length, avgAcc:acc(ans),
-    };
+      attempts:atts.length, avgAcc:acc(ans) };
   });
 }
 /* 每位員工統計 */
 function staffStats(){
   return staff().map(u=>{
-    const ans = ansAll().filter(a=>a.userId===u.id);
-    const atts = attAll().filter(a=>a.userId===u.id);
-    const doneQuiz = new Set(atts.map(a=>a.quizId));
-    const last = atts.reduce((m,a)=>Math.max(m,a.at),0);
+    const ans = ansAll().filter(a=>a.user_id===u.id);
+    const atts = attAll().filter(a=>a.user_id===u.id);
+    const doneQuiz = new Set(atts.map(a=>a.quiz_id));
+    const last = atts.reduce((m,a)=>Math.max(m,toMs(a.at)),0);
     return { u, points:u.points, streak:u.streak,
       correct:ans.filter(a=>a.correct).length, answered:ans.length, avgAcc:acc(ans),
       attempts:atts.length, quizzesDone:doneQuiz.size, last };
   });
 }
-/* 每題難度分析 */
+/* 每題難度 */
 function itemStats(){
-  return DB.questions().map(q=>{
-    const ans = ansAll().filter(a=>a.questionId===q.id);
+  return RR.questions.map(q=>{
+    const ans = ansAll().filter(a=>a.question_id===q.id);
     const rate = acc(ans);
     let level='適中', cls='st-good', ic='●';
     if(rate!==null && rate<50){ level='偏難'; cls='st-bad'; ic='▲'; }
     else if(rate!==null && rate>=90){ level='偏易'; cls='st-warn'; ic='▼'; }
-    const quiz=DB.quiz(q.quizId);
-    return { q, quiz, n:ans.length, rate, level, cls, ic };
+    return { q, quiz:quizById(q.quiz_id), n:ans.length, rate, level, cls, ic };
   }).sort((a,b)=>(a.rate??999)-(b.rate??999));
 }
-/* 分數趨勢（每日平均正確率） */
+/* 分數趨勢 */
 function dailyTrend(){
-  const today=todayNum(), days=Sr.range;
-  const out=[];
+  const today=Math.floor(Date.now()/DAY), days=Sr.range, out=[], ids=staffIdSet();
   for(let k=days-1;k>=0;k--){
     const dayNo=today-k;
-    const ans=DB.answers().filter(a=>Math.floor(a.at/DAY)===dayNo);
+    const ans=RR.answers.filter(a=>ids.has(a.user_id) && Math.floor(toMs(a.at)/DAY)===dayNo);
     if(!ans.length) continue;
     out.push({ label:fmtDate(dayNo*DAY), value:acc(ans) });
   }
   return out;
 }
-/* 分數分布（依每次作答正確率分桶） */
 function scoreBuckets(){
   const buckets=[{lb:'0–59',min:0,max:59,n:0},{lb:'60–69',min:60,max:69,n:0},{lb:'70–79',min:70,max:79,n:0},{lb:'80–89',min:80,max:89,n:0},{lb:'90–100',min:90,max:100,n:0}];
-  attAll().forEach(a=>{ const pct=Math.round(a.score/a.total*100); const b=buckets.find(b=>pct>=b.min&&pct<=b.max); if(b)b.n++; });
+  attAll().forEach(a=>{ if(!a.total)return; const pct=Math.round(a.score/a.total*100); const b=buckets.find(b=>pct>=b.min&&pct<=b.max); if(b)b.n++; });
   return buckets;
 }
-/* 角色別平均正確率 */
 function roleAcc(){
   return staffRoles().map(rk=>{
     const ids=new Set(staff().filter(u=>u.role===rk).map(u=>u.id));
-    const ans=ansAll().filter(a=>ids.has(a.userId));
+    const ans=ansAll().filter(a=>ids.has(a.user_id));
     return { role:rk, name:roleName(rk), value:acc(ans), color:ROLE_SERIES[rk] };
   });
 }
 
 /* ---------- 圖表元件 ---------- */
-function hbars(items){ // items:[{label,value(0-100),display,color?}]
+function hbars(items){
   return items.map(it=>`<div class="hbar">
     <div class="top"><span class="lb">${esc(it.label)}</span><span class="v">${it.display??(it.value==null?'—':it.value+'%')}</span></div>
     <div class="track"><div class="fill" style="width:${it.value==null?0:it.value}%${it.color?`;background:${it.color}`:''}"></div></div>
   </div>`).join('');
 }
-function vbars(items, unit=''){ // items:[{label,value,display}]
+function vbars(items, unit=''){
   const max=Math.max(1,...items.map(i=>i.value));
   return `<div class="vbars">${items.map(i=>`<div class="col">
     <div class="cv">${i.display??i.value}${unit}</div>
@@ -123,7 +150,7 @@ function vbars(items, unit=''){ // items:[{label,value,display}]
     <div class="cl">${esc(i.label)}</div>
   </div>`).join('')}</div>`;
 }
-function lineChart(series){ // series:[{label,value 0-100}]
+function lineChart(series){
   const w=680,h=210,pad=30, innerW=w-pad-14, innerH=h-pad-22;
   if(series.length<2) return `<div class="empty">資料不足，至少需要兩天的作答紀錄才能畫趨勢。</div>`;
   const n=series.length;
@@ -137,17 +164,17 @@ function lineChart(series){ // series:[{label,value 0-100}]
   const step=Math.max(1,Math.ceil(n/7));
   const xl=series.map((s,i)=>(i%step===0||i===n-1)?`<text x="${X(i).toFixed(1)}" y="${h-6}" text-anchor="middle" font-size="10" fill="#898781">${esc(s.label)}</text>`:'').join('');
   return `<svg viewBox="0 0 ${w} ${h}" width="100%" preserveAspectRatio="xMidYMid meet" style="display:block">
-    ${grid}
-    <path d="${area}" fill="rgba(15,157,143,.12)"/>
+    ${grid}<path d="${area}" fill="rgba(15,157,143,.12)"/>
     <path d="${line}" fill="none" stroke="${BRAND}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-    ${dots}${xl}
-  </svg>`;
+    ${dots}${xl}</svg>`;
 }
+function statBadge(v,[g,w]){ const cls = v>=g?'st-good':(v>=w?'st-warn':'st-bad'); return `<span class="badge-stat ${cls}">${v}%</span>`; }
 
 /* ---------- KPI ---------- */
 function kpis(){
   const st=staffStats();
-  const active=new Set(DB.attempts().filter(a=>(Date.now()-a.at)<=7*DAY).map(a=>a.userId)).size;
+  const sids=staffIdSet();
+  const active=new Set(RR.attempts.filter(a=>sids.has(a.user_id) && (Date.now()-toMs(a.at))<=7*DAY).map(a=>a.user_id)).size;
   const overall=acc(ansAll());
   const qs=quizStats();
   const totalElig=qs.reduce((s,q)=>s+q.eligible,0), totalDone=qs.reduce((s,q)=>s+q.completed,0);
@@ -156,12 +183,12 @@ function kpis(){
   return [
     { ic:'teal', e:'👥', num:staff().length, lbl:'員工人數' },
     { ic:'teal', e:'⚡', num:active, lbl:'近7天活躍' },
-    { ic:'gold', e:'🎯', num:overall==null?'—':overall+'%', lbl:`平均正確率` },
+    { ic:'gold', e:'🎯', num:overall==null?'—':overall+'%', lbl:'平均正確率' },
     { ic:'amber',e:'📊', num:compRate+'%', lbl:'整體完成率' },
     { ic:'teal', e:'📝', num:attAll().length, lbl:'作答次數' },
     { ic:'gold', e:'✅', num:ansAll().length, lbl:'總作答題數' },
     { ic:'amber',e:'⭐', num:avgPts, lbl:'平均積分' },
-    { ic:'teal', e:'📚', num:DB.questions().length, lbl:'題庫題數' },
+    { ic:'teal', e:'📚', num:RR.questions.length, lbl:'題庫題數' },
   ];
 }
 
@@ -178,18 +205,16 @@ const TABS=[
 const RANGES=[{d:7,n:'近7天'},{d:30,n:'近30天'},{d:90,n:'近90天'},{d:3650,n:'全部'}];
 
 function render(){
-  DB.refresh();
   const body={ overview:viewOverview, quizzes:viewQuizzes, staff:viewStaff, items:viewItems, records:viewRecords }[Sr.tab]();
   root().innerHTML=`<div class="shell wide">
     <div class="topbar">
       <div class="brand"><span class="mark">✚</span>照護<b>學堂</b> · 主管報表</div>
       <div class="grow"></div>
       <a href="admin.html" class="toplink" style="margin-right:8px">🛠️ 題庫後台</a>
-      <a href="index.html" class="toplink">↩ 前台</a>
+      <a href="index.html" class="toplink" style="margin-right:8px">↩ 前台</a>
+      <button class="iconbtn" title="登出" onclick="Auth.logout().then(()=>location.href='index.html')">⏻</button>
     </div>
-    <div class="tabnav">
-      ${TABS.map(t=>`<button class="${Sr.tab===t.k?'on':''}" onclick="goTab('${t.k}')">${t.e} ${t.n}</button>`).join('')}
-    </div>
+    <div class="tabnav">${TABS.map(t=>`<button class="${Sr.tab===t.k?'on':''}" onclick="goTab('${t.k}')">${t.e} ${t.n}</button>`).join('')}</div>
     <div class="tabnav" style="padding-top:8px">
       <span class="mini" style="align-self:center;margin-right:4px">期間：</span>
       ${RANGES.map(r=>`<button class="${Sr.range===r.d?'on':''}" style="padding:7px 13px;font-size:13px" onclick="setRange(${r.d})">${r.n}</button>`).join('')}
@@ -200,148 +225,74 @@ function render(){
 function goTab(k){ Sr.tab=k; window.scrollTo(0,0); render(); }
 function setRange(d){ Sr.range=d; render(); }
 
-/* ---- 總覽 ---- */
 function viewOverview(){
   const trend=dailyTrend();
   const comp=quizStats().map(q=>({label:q.quiz.title, value:q.completion, display:`${q.completed}/${q.eligible}（${q.completion}%）`}));
   const ra=roleAcc().map(r=>({label:r.name, value:r.value, color:r.color, display:r.value==null?'—':r.value+'%'}));
   const buckets=scoreBuckets().map(b=>({label:b.lb, value:b.n, display:b.n}));
   return `
-  <div class="kpis">
-    ${kpis().map(k=>`<div class="tile"><div class="ic ${k.ic}">${k.e}</div><div class="num">${k.num}</div><div class="lbl">${k.lbl}</div></div>`).join('')}
-  </div>
-
+  <div class="kpis">${kpis().map(k=>`<div class="tile"><div class="ic ${k.ic}">${k.e}</div><div class="num">${k.num}</div><div class="lbl">${k.lbl}</div></div>`).join('')}</div>
   <div class="cols2" style="margin-top:14px">
-    <div class="card">
-      <div class="chart-title">📈 分數趨勢</div>
-      <div class="chart-sub">每日平均正確率（%）</div>
-      ${lineChart(trend)}
-    </div>
-    <div class="card">
-      <div class="chart-title">📊 分數分布</div>
-      <div class="chart-sub">各作答的正確率落點（次數）</div>
-      ${vbars(buckets)}
-    </div>
+    <div class="card"><div class="chart-title">📈 分數趨勢</div><div class="chart-sub">每日平均正確率（%）</div>${lineChart(trend)}</div>
+    <div class="card"><div class="chart-title">📊 分數分布</div><div class="chart-sub">各作答的正確率落點（次數）</div>${vbars(buckets)}</div>
   </div>
-
   <div class="cols2" style="margin-top:12px">
-    <div class="card">
-      <div class="chart-title">✅ 各測驗完成度</div>
-      <div class="chart-sub">已完成人數 / 應完成人數</div>
-      ${comp.length? hbars(comp):'<div class="empty">尚無測驗</div>'}
-    </div>
-    <div class="card">
-      <div class="chart-title">👥 角色別平均正確率</div>
-      <div class="chart-sub">依職類比較</div>
-      ${hbars(ra)}
-      <div class="legend">${roleAcc().map(r=>`<span class="k"><span class="dot" style="background:${r.color}"></span>${r.name}</span>`).join('')}</div>
-    </div>
+    <div class="card"><div class="chart-title">✅ 各測驗完成度</div><div class="chart-sub">已完成人數 / 應完成人數</div>${comp.length? hbars(comp):'<div class="empty">尚無測驗</div>'}</div>
+    <div class="card"><div class="chart-title">👥 角色別平均正確率</div><div class="chart-sub">依職類比較</div>${hbars(ra)}
+      <div class="legend">${roleAcc().map(r=>`<span class="k"><span class="dot" style="background:${r.color}"></span>${r.name}</span>`).join('')}</div></div>
   </div>`;
 }
-
-/* ---- 測驗分析 ---- */
 function viewQuizzes(){
   const qs=quizStats();
   const avg=qs.map(q=>({label:q.quiz.title, value:q.avgAcc, display:q.avgAcc==null?'—':q.avgAcc+'%'}));
   return `
-  <div class="card">
-    <div class="chart-title">🎯 各測驗平均正確率</div>
-    <div class="chart-sub">越低代表越需要加強</div>
-    ${avg.length?hbars(avg):'<div class="empty">尚無資料</div>'}
-  </div>
-  <div class="card" style="margin-top:12px">
-    <div class="chart-title">📋 測驗總表</div>
-    <div class="chart-sub">完成度與作答概況</div>
+  <div class="card"><div class="chart-title">🎯 各測驗平均正確率</div><div class="chart-sub">越低代表越需要加強</div>${avg.length?hbars(avg):'<div class="empty">尚無資料</div>'}</div>
+  <div class="card" style="margin-top:12px"><div class="chart-title">📋 測驗總表</div><div class="chart-sub">完成度與作答概況</div>
     <div class="tbl-wrap"><table class="rep">
       <thead><tr><th>測驗</th><th>開放對象</th><th>題數</th><th>作答次數</th><th>平均正確率</th><th>完成人數</th><th>完成率</th></tr></thead>
-      <tbody>${qs.map(q=>`<tr>
-        <td class="name">${esc(q.quiz.title)}</td>
-        <td>${q.quiz.roles.map(roleName).join('、')}</td>
-        <td>${q.questions}</td>
-        <td>${q.attempts}</td>
-        <td>${q.avgAcc==null?'—':q.avgAcc+'%'}</td>
-        <td>${q.completed}/${q.eligible}</td>
-        <td>${statBadge(q.completion,[70,40])}</td>
-      </tr>`).join('')||'<tr><td colspan="7" class="mini">尚無資料</td></tr>'}</tbody>
-    </table></div>
-  </div>`;
+      <tbody>${qs.map(q=>`<tr><td class="name">${esc(q.quiz.title)}</td><td>${(q.quiz.roles||[]).map(roleName).join('、')}</td>
+        <td>${q.questions}</td><td>${q.attempts}</td><td>${q.avgAcc==null?'—':q.avgAcc+'%'}</td>
+        <td>${q.completed}/${q.eligible}</td><td>${statBadge(q.completion,[70,40])}</td></tr>`).join('')||'<tr><td colspan="7" class="mini">尚無資料</td></tr>'}</tbody>
+    </table></div></div>`;
 }
-
-/* ---- 員工表現 ---- */
 function viewStaff(){
   const rows=staffStats().sort((a,b)=>b.points-a.points);
   return `
-  <div class="card">
-    <div class="chart-title">👥 員工表現總表</div>
-    <div class="chart-sub">依積分排序 · 期間內數據</div>
+  <div class="card"><div class="chart-title">👥 員工表現總表</div><div class="chart-sub">依積分排序 · 期間內數據</div>
     <div class="tbl-wrap"><table class="rep">
       <thead><tr><th>員工</th><th>角色</th><th>積分</th><th>連續天數</th><th>作答次數</th><th>答對/作答</th><th>平均正確率</th><th>完成測驗</th><th>最後作答</th></tr></thead>
-      <tbody>${rows.map(r=>`<tr>
-        <td class="name">${esc(r.u.name)}</td>
-        <td>${roleName(r.u.role)}</td>
-        <td>${r.points}</td>
-        <td>🔥${r.streak}</td>
-        <td>${r.attempts}</td>
-        <td>${r.correct}/${r.answered}</td>
-        <td>${r.avgAcc==null?'—':statBadge(r.avgAcc,[80,60])}</td>
-        <td>${r.quizzesDone}</td>
-        <td>${r.last?fmtDate(r.last):'—'}</td>
-      </tr>`).join('')||'<tr><td colspan="9" class="mini">尚無資料</td></tr>'}</tbody>
-    </table></div>
-  </div>`;
+      <tbody>${rows.map(r=>`<tr><td class="name">${esc(r.u.name)}</td><td>${roleName(r.u.role)}</td><td>${r.points}</td>
+        <td>🔥${r.streak}</td><td>${r.attempts}</td><td>${r.correct}/${r.answered}</td>
+        <td>${r.avgAcc==null?'—':statBadge(r.avgAcc,[80,60])}</td><td>${r.quizzesDone}</td><td>${r.last?fmtDate(r.last):'—'}</td></tr>`).join('')||'<tr><td colspan="9" class="mini">尚無資料</td></tr>'}</tbody>
+    </table></div></div>`;
 }
-
-/* ---- 題目分析 ---- */
 function viewItems(){
   const items=itemStats();
   return `
   <div class="admin-hint">💡 依答對率（難度）由低到高排序。偏難的題目可能敘述不清或教材不足，偏易的題目鑑別度低。</div>
-  <div class="card">
-    <div class="chart-title">🔍 題目難度分析</div>
-    <div class="chart-sub">答對率＝難度指標</div>
+  <div class="card"><div class="chart-title">🔍 題目難度分析</div><div class="chart-sub">答對率＝難度指標</div>
     <div class="tbl-wrap"><table class="rep">
       <thead><tr><th>題目</th><th>測驗</th><th>作答次數</th><th>答對率</th><th>評估</th></tr></thead>
-      <tbody>${items.map(it=>`<tr>
-        <td class="name" style="white-space:normal;min-width:260px">${esc(it.q.stem)}</td>
-        <td>${it.quiz?esc(it.quiz.title):'—'}</td>
-        <td>${it.n}</td>
-        <td>${it.rate==null?'—':it.rate+'%'}</td>
-        <td><span class="badge-stat ${it.cls}">${it.ic} ${it.level}</span></td>
-      </tr>`).join('')||'<tr><td colspan="5" class="mini">尚無資料</td></tr>'}</tbody>
-    </table></div>
-  </div>`;
+      <tbody>${items.map(it=>`<tr><td class="name" style="white-space:normal;min-width:260px">${esc(it.q.stem)}</td>
+        <td>${it.quiz?esc(it.quiz.title):'—'}</td><td>${it.n}</td><td>${it.rate==null?'—':it.rate+'%'}</td>
+        <td><span class="badge-stat ${it.cls}">${it.ic} ${it.level}</span></td></tr>`).join('')||'<tr><td colspan="5" class="mini">尚無資料</td></tr>'}</tbody>
+    </table></div></div>`;
 }
-
-/* ---- 作答明細 ---- */
 function viewRecords(){
-  const rows=attAll().slice().sort((a,b)=>b.at-a.at).slice(0,300);
+  const rows=attAll().slice().sort((a,b)=>toMs(b.at)-toMs(a.at)).slice(0,300);
   return `
-  <div class="card">
-    <div class="chart-title">🧾 作答明細</div>
-    <div class="chart-sub">最近 ${rows.length} 筆（期間內）</div>
+  <div class="card"><div class="chart-title">🧾 作答明細</div><div class="chart-sub">最近 ${rows.length} 筆（期間內）· 含裝置代碼供異常比對</div>
     <div class="tbl-wrap"><table class="rep">
-      <thead><tr><th>時間</th><th>員工</th><th>角色</th><th>測驗</th><th>得分</th><th>正確率</th></tr></thead>
-      <tbody>${rows.map(a=>{ const u=DB.user(a.userId), q=DB.quiz(a.quizId); const pct=Math.round(a.score/a.total*100);
-        return `<tr>
-          <td>${fmtDateTime(a.at)}</td>
-          <td class="name">${u?esc(u.name):'—'}</td>
-          <td>${u?roleName(u.role):'—'}</td>
-          <td>${q?esc(q.title):'（複習）'}</td>
-          <td>${a.score}/${a.total}</td>
-          <td>${statBadge(pct,[80,60])}</td>
-        </tr>`; }).join('')||'<tr><td colspan="6" class="mini">尚無作答紀錄</td></tr>'}</tbody>
-    </table></div>
-  </div>`;
-}
-
-/* 狀態徽章：value 依門檻 [good,warn] 上色 */
-function statBadge(v,[g,w]){
-  const cls = v>=g?'st-good':(v>=w?'st-warn':'st-bad');
-  return `<span class="badge-stat ${cls}">${v}%</span>`;
+      <thead><tr><th>時間</th><th>員工</th><th>角色</th><th>測驗</th><th>得分</th><th>正確率</th><th>裝置</th></tr></thead>
+      <tbody>${rows.map(a=>{ const u=userById(a.user_id), q=quizById(a.quiz_id); const pct=a.total?Math.round(a.score/a.total*100):0;
+        return `<tr><td>${fmtDateTime(toMs(a.at))}</td><td class="name">${u?esc(u.name):'—'}</td><td>${u?roleName(u.role):'—'}</td>
+          <td>${q?esc(q.title):'（複習）'}</td><td>${a.score}/${a.total}</td><td>${statBadge(pct,[80,60])}</td>
+          <td class="mini">${a.device_id?esc(String(a.device_id).slice(0,8)):'—'}</td></tr>`; }).join('')||'<tr><td colspan="7" class="mini">尚無作答紀錄</td></tr>'}</tbody>
+    </table></div></div>`;
 }
 
 /* ---------- 啟動 ---------- */
-render();
+boot();
 </script>
 </body>
 </html>
