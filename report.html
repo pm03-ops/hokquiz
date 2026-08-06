@@ -15,8 +15,8 @@
 <div id="toast-host"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-client.js?v=13"></script>
-<script src="db.js?v=12"></script>
+<script src="supabase-client.js?v=14"></script>
+<script src="db.js?v=14"></script>
 <script>
 /* =====================================================================
    主管報表 report.html —— 唯讀：完成度 / 分數趨勢 / 角色比較 / 題目難度…
@@ -28,7 +28,7 @@ const DAY = 86400000;
 const root=()=>document.getElementById('root');
 
 /* 載入的資料 */
-const RR = { profiles:[], attempts:[], answers:[], quizzes:[], questions:[] };
+const RR = { profiles:[], attempts:[], answers:[], quizzes:[], questions:[], merges:[] };
 const toMs = s => s ? new Date(s).getTime() : 0;
 
 /* 色彩 */
@@ -47,16 +47,17 @@ async function boot(){
     return;
   }
   try{
-    const [p,at,an,qz,qs] = await Promise.all([
+    const [p,at,an,qz,qs,um] = await Promise.all([
       sb.from('profiles').select('*'),
       sb.from('attempts').select('*'),
       sb.from('answers').select('*'),
       sb.from('quizzes').select('*'),
       sb.from('questions').select('id, quiz_id, stem'),
+      sb.from('unit_merges').select('*'),
     ]);
-    const err=[p,at,an,qz,qs].find(r=>r.error); if(err) throw err.error;
+    const err=[p,at,an,qz,qs,um].find(r=>r.error); if(err) throw err.error;
     RR.profiles=p.data||[]; RR.attempts=at.data||[]; RR.answers=an.data||[];
-    RR.quizzes=qz.data||[]; RR.questions=qs.data||[];
+    RR.quizzes=qz.data||[]; RR.questions=qs.data||[]; RR.merges=um.data||[];
   }catch(e){ toast('載入失敗：'+e.message); }
   render();
 }
@@ -170,6 +171,38 @@ function lineChart(series){
 }
 function statBadge(v,[g,w]){ const cls = v>=g?'st-good':(v>=w?'st-warn':'st-bad'); return `<span class="badge-stat ${cls}">${v}%</span>`; }
 
+/* ---- 單位分析（套用合併群組）---- */
+function unitGroupKey(code){
+  for(const m of RR.merges){ if((m.units||[]).includes(code)) return { key:'m:'+m.id, label:m.name }; }
+  const u=UNITS.find(x=>x.code===code);
+  return u ? { key:'u:'+code, label:`${u.name}（${u.code}）` } : { key:'u:none', label:'未分單位' };
+}
+function unitStats(){
+  const groups={};
+  staff().forEach(u=>{ const g=unitGroupKey(u.unit);
+    (groups[g.key]||(groups[g.key]={label:g.label, list:[]})).list.push(u); });
+  return Object.values(groups).map(g=>{
+    const ids=new Set(g.list.map(u=>u.id));
+    const ans=ansAll().filter(a=>ids.has(a.user_id));
+    const atts=attAll().filter(a=>ids.has(a.user_id));
+    const active=new Set(RR.attempts.filter(a=>ids.has(a.user_id) && (Date.now()-toMs(a.at))<=7*DAY).map(a=>a.user_id)).size;
+    return { label:g.label, people:g.list.length, active, attempts:atts.length, answered:ans.length,
+      avgAcc:acc(ans), avgPoints: g.list.length? Math.round(g.list.reduce((s,u)=>s+u.points,0)/g.list.length):0 };
+  }).sort((a,b)=>b.people-a.people);
+}
+function viewUnitsReport(){
+  const rows=unitStats();
+  const accBars=rows.map(r=>({label:r.label, value:r.avgAcc, display:r.avgAcc==null?'—':r.avgAcc+'%'}));
+  return `
+  <div class="admin-hint">💡 依單位統計；若在「後台 → 🏢 單位」設定了合併群組，這裡會把該群組的單位<b>加總成一列</b>。</div>
+  <div class="card"><div class="chart-title">🏢 各單位平均正確率</div><div class="chart-sub">合併群組會加總</div>${accBars.length?hbars(accBars):'<div class="empty">尚無資料</div>'}</div>
+  <div class="card" style="margin-top:12px"><div class="chart-title">📋 各單位總表</div><div class="chart-sub">期間內數據</div>
+    <div class="tbl-wrap"><table class="rep">
+      <thead><tr><th>單位／群組</th><th>人數</th><th>近7天活躍</th><th>作答次數</th><th>總作答題數</th><th>平均正確率</th><th>平均積分</th></tr></thead>
+      <tbody>${rows.map(r=>`<tr><td class="name">${esc(r.label)}</td><td>${r.people}</td><td>${r.active}</td><td>${r.attempts}</td><td>${r.answered}</td><td>${r.avgAcc==null?'—':statBadge(r.avgAcc,[80,60])}</td><td>${r.avgPoints}</td></tr>`).join('')||'<tr><td colspan="7" class="mini">尚無資料</td></tr>'}</tbody>
+    </table></div></div>`;
+}
+
 /* ---------- KPI ---------- */
 function kpis(){
   const st=staffStats();
@@ -199,13 +232,14 @@ const TABS=[
   {k:'overview', e:'📊', n:'總覽'},
   {k:'quizzes',  e:'📋', n:'測驗分析'},
   {k:'staff',    e:'👥', n:'員工表現'},
+  {k:'units',    e:'🏢', n:'單位分析'},
   {k:'items',    e:'🔍', n:'題目分析'},
   {k:'records',  e:'🧾', n:'作答明細'},
 ];
 const RANGES=[{d:7,n:'近7天'},{d:30,n:'近30天'},{d:90,n:'近90天'},{d:3650,n:'全部'}];
 
 function render(){
-  const body={ overview:viewOverview, quizzes:viewQuizzes, staff:viewStaff, items:viewItems, records:viewRecords }[Sr.tab]();
+  const body={ overview:viewOverview, quizzes:viewQuizzes, staff:viewStaff, units:viewUnitsReport, items:viewItems, records:viewRecords }[Sr.tab]();
   root().innerHTML=`<div class="shell wide">
     <div class="topbar">
       <div class="brand"><span class="mark">✚</span>照護<b>學堂</b> · 主管報表</div>

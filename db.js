@@ -17,6 +17,18 @@ const ROLES = [
 const roleOf   = k => ROLES.find(r=>r.key===k) || {name:k,color:'#888',emoji:'👤'};
 const roleName = k => roleOf(k).name;
 
+/* ---------- 單位（機構）預設清單 ---------- */
+const UNITS = [
+  { code:'8C', name:'清福', zone:'C' }, { code:'7C', name:'清氣', zone:'C' }, { code:'6C', name:'清心', zone:'C' },
+  { code:'5C', name:'清平', zone:'C' }, { code:'3C', name:'清安', zone:'C' }, { code:'2C', name:'護家', zone:'C' },
+  { code:'8D', name:'清春', zone:'D' }, { code:'7D', name:'清日', zone:'D' }, { code:'6D', name:'清照', zone:'D' },
+  { code:'5D', name:'清風', zone:'D' }, { code:'3D', name:'清景', zone:'D' }, { code:'2D', name:'護家', zone:'D' },
+  { code:'8E', name:'清山', zone:'E' }, { code:'7E', name:'清泉', zone:'E' }, { code:'6E', name:'清水', zone:'E' },
+  { code:'5E', name:'清清', zone:'E' }, { code:'3E', name:'清涼', zone:'E' },
+];
+const unitOf   = code => UNITS.find(u=>u.code===code) || null;
+const unitLabel= code => { const u=unitOf(code); return u ? `${u.name}（${u.code}）` : (code || '未分單位'); };
+
 /* SRS 間隔（天）—— 測驗複習用 */
 const SRS_INTERVALS = [0, 1, 3, 7, 14, 30, 90];
 /* 字卡間隔（天）—— Anki 式：按「熟悉」逐級變長，2–3 次後就很少再出現 */
@@ -219,6 +231,28 @@ const DB = {
   async allProfiles(){
     const { data, error } = await sb.from('profiles').select('*').order('role').order('employee_id');
     if(error) throw error; return data||[];
+  },
+  async setUserUnit(userId, unit){
+    const { error } = await sb.from('profiles').update({ unit: unit||'' }).eq('id', userId);
+    if(error) throw error;
+  },
+
+  /* ---------- 合併單位群組（後台 / 報表用） ---------- */
+  async loadUnitMerges(){
+    const { data, error } = await sb.from('unit_merges').select('*').order('created_at');
+    if(error) throw error; return data||[];
+  },
+  async saveUnitMerge(row){          // row: {id?, name, units[]}
+    if(row.id){
+      const { data, error } = await sb.from('unit_merges').update({ name:row.name, units:row.units }).eq('id',row.id).select().single();
+      if(error) throw error; return data;
+    }
+    const { data, error } = await sb.from('unit_merges').insert({ name:row.name, units:row.units }).select().single();
+    if(error) throw error; return data;
+  },
+  async deleteUnitMerge(id){
+    const { error } = await sb.from('unit_merges').delete().eq('id',id);
+    if(error) throw error;
   },
 };
 

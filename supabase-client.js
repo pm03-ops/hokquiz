@@ -39,7 +39,7 @@ const Auth = {
   },
 
   /** 員工自行註冊：建立登入 + 自己的 profile（角色限職員，不能是 admin） */
-  async register(employeeId, name, role, password){
+  async register(employeeId, name, role, password, unit){
     if(!['care','social','nurse'].includes(role)) throw new Error('角色不正確');
     const email = empIdToEmail(employeeId);
     const { data, error } = await sb.auth.signUp({ email, password });
@@ -51,7 +51,7 @@ const Auth = {
     if(!uid){ const u = await sb.auth.getUser(); uid = u.data.user && u.data.user.id; }
     if(!uid) throw new Error('註冊未完成，請重試或改用登入');
     const { error: pErr } = await sb.from('profiles').insert({
-      id: uid, employee_id: String(employeeId).toUpperCase(), name, role, must_change_password: false,
+      id: uid, employee_id: String(employeeId).toUpperCase(), name, role, unit: unit || '', must_change_password: false,
     });
     if(pErr){
       await sb.auth.signOut();

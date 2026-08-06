@@ -15,15 +15,15 @@
 <div id="toast-host"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-client.js?v=13"></script>
-<script src="db.js?v=12"></script>
+<script src="supabase-client.js?v=14"></script>
+<script src="db.js?v=14"></script>
 <script>
 /* =====================================================================
    後台 admin.html —— 題庫管理（測驗 / 題目 / 帳號 / AI）
    僅限管理員（role=admin）。非管理員一律導回前台登入。
    ===================================================================== */
 
-const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', impN:'auto', drafts:[], draftQuiz:null };
+const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', impN:'auto', drafts:[], draftQuiz:null, merges:[], editMerge:null, mergeSel:[] };
 function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'', quizNote:'', flashAnswer:'' }; }
 resetK();
 const root=()=>document.getElementById('root');
@@ -41,7 +41,7 @@ async function boot(){
     </div></div></div>`;
     return;
   }
-  try{ await DB.loadForAdmin(); Sa.profiles=await DB.allProfiles(); }catch(e){ toast('載入失敗：'+e.message); }
+  try{ await DB.loadForAdmin(); Sa.profiles=await DB.allProfiles(); Sa.merges=await DB.loadUnitMerges(); }catch(e){ toast('載入失敗：'+e.message); }
   render();
 }
 
@@ -50,10 +50,11 @@ const TABS=[
   {k:'questions',e:'📝', n:'題目'},
   {k:'import',   e:'📄', n:'AI 匯入出題'},
   {k:'users',    e:'👤', n:'帳號'},
+  {k:'units',    e:'🏢', n:'單位'},
   {k:'settings', e:'⚙️', n:'AI 設定'},
 ];
 function render(){
-  const body={ quizzes:viewQuizzes, questions:viewQuestions, import:viewImport, users:viewUsers, settings:viewSettings }[Sa.tab]();
+  const body={ quizzes:viewQuizzes, questions:viewQuestions, import:viewImport, users:viewUsers, units:viewUnits, settings:viewSettings }[Sa.tab]();
   root().innerHTML=`<div class="shell wide">
     <div class="topbar">
       <div class="brand"><span class="mark">✚</span>照護<b>學堂</b> · 管理後台</div>
@@ -69,7 +70,7 @@ function render(){
   </div>`;
   bindChips();
 }
-function goTab(k){ Sa.tab=k; window.scrollTo(0,0); render(); }
+function goTab(k){ Sa.tab=k; if(k==='units'){ Sa.editMerge=null; Sa.mergeSel=[]; } window.scrollTo(0,0); render(); }
 function bindChips(){
   document.querySelectorAll('#nq_roles input').forEach(cb=>{
     cb.onchange=()=>cb.closest('.chip-ck').classList.toggle('sel', cb.checked); });
@@ -249,6 +250,8 @@ function viewUsers(){
       <div class="chips" id="nu_role">
         ${ROLES.map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="radio" name="nurole" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
       </div>
+      <label class="fld">所屬單位（管理員可留空）</label>
+      <select id="nu_unit"><option value="">— 選擇單位 —</option>${['C','D','E'].map(z=>`<optgroup label="區 ${z}">${UNITS.filter(u=>u.zone===z).map(u=>`<option value="${u.code}">${esc(u.name)}（${u.code}）</option>`).join('')}</optgroup>`).join('')}</select>
       <label class="fld">預設密碼（至少 6 碼）</label>
       <input id="nu_pw" placeholder="例如 care1234">
       <button class="btn block" style="margin-top:16px" id="nu_btn" onclick="createStaff()">建立帳號</button>
@@ -259,7 +262,8 @@ function viewUsers(){
         return `<div class="row-item">
           <span class="avatar" style="background:${r.color};width:40px;height:40px">${esc(initials(x.name))}</span>
           <div class="row-body"><div class="t">${esc(x.name)} <span class="tag">${esc(x.employee_id)}</span>${isSelf?' <span class="tag teal">你</span>':''}</div>
-            <div class="s">${roleName(x.role)} · ${x.points}分 · ✅${x.answered}題${x.must_change_password?' · 🔑待改密碼':''}</div></div>
+            <div class="s">${roleName(x.role)}${x.role!=='admin'?' · '+esc(unitLabel(x.unit)):''} · ${x.points}分 · ✅${x.answered}題${x.must_change_password?' · 🔑待改密碼':''}</div>
+            ${x.role!=='admin'?`<select onchange="changeUserUnit('${x.id}',this.value)" style="margin-top:6px;font-size:13px;max-width:220px"><option value="">未分單位</option>${UNITS.map(u=>`<option value="${u.code}" ${x.unit===u.code?'selected':''}>${esc(u.name)}（${u.code}）</option>`).join('')}</select>`:''}</div>
           <div class="rowbtns">
             <button class="btn sec sm" onclick="resetStaffPw('${x.id}','${esc(x.employee_id)}')">重設密碼</button>
             ${isSelf?'':`<button class="btn danger sm" onclick="deleteStaff('${x.id}','${esc(x.name)}')">刪除</button>`}
@@ -273,16 +277,22 @@ async function createStaff(){
   const name=(document.getElementById('nu_name').value||'').trim();
   const role=(document.querySelector('#nu_role input:checked')||{}).value;
   const password=document.getElementById('nu_pw').value||'';
+  const unit=document.getElementById('nu_unit').value||'';
   if(!/^H\d{4}$/.test(employeeId)){ toast('員工編號須為 H + 4 碼數字'); return; }
   if(!name){ toast('請輸入姓名'); return; }
   if(!role){ toast('請選擇角色'); return; }
   if(password.length<6){ toast('預設密碼至少 6 碼'); return; }
   const btn=document.getElementById('nu_btn'); btn.disabled=true; btn.textContent='建立中…';
   try{
-    await adminUsers('create', { employeeId, name, role, password });
+    const res=await adminUsers('create', { employeeId, name, role, password });
+    if(res && res.id && unit){ try{ await DB.setUserUnit(res.id, unit); }catch(_){} }
     Sa.profiles=await DB.allProfiles();
     toast(`已建立 ${employeeId}`); render();
   }catch(e){ toast('❌ '+e.message); btn.disabled=false; btn.textContent='建立帳號'; }
+}
+async function changeUserUnit(userId, unit){
+  try{ await DB.setUserUnit(userId, unit); const p=Sa.profiles.find(x=>x.id===userId); if(p)p.unit=unit; toast('單位已更新'); }
+  catch(e){ toast('更新失敗：'+e.message); }
 }
 async function resetStaffPw(userId, empId){
   const pw=prompt(`為 ${empId} 設定新的預設密碼（至少 6 碼）。員工下次登入會被要求再改成自己的密碼。`);
@@ -438,6 +448,67 @@ async function addAllDrafts(){
   Sa.drafts=keep; toast(`已加入 ${added} 題${keep.length?`，${keep.length} 題資料不全保留`:''}`); render();
 }
 function discardDraft(i){ Sa.drafts.splice(i,1); render(); }
+
+/* =====================================================================
+   單位管理（合併群組）
+   ===================================================================== */
+function viewUnits(){
+  const merges=Sa.merges||[];
+  const grouped=new Set(); merges.forEach(m=>(m.units||[]).forEach(c=>grouped.add(c)));
+  const editing=Sa.editMerge;
+  const counts={}; (Sa.profiles||[]).forEach(p=>{ if(p.role!=='admin'&&p.unit){ counts[p.unit]=(counts[p.unit]||0)+1; } });
+  return `
+  <div class="admin-hint">💡 <b>合併單位</b>：把幾個單位圈成一組，主管報表會把它們的資料<b>加總</b>顯示（單位本身不變，隨時可改或拆開）。用於未來單位可能合併、但方式尚未確定時。</div>
+  <div class="cols2">
+    <div class="card">
+      <div class="card-h">${editing?'✏️ 編輯合併群組':'➕ 新增合併群組'}</div>
+      <label class="fld">群組名稱（報表顯示用）</label>
+      <input id="mg_name" placeholder="例如：清福清氣合併區" value="${editing?esc(editing.name):''}">
+      <label class="fld">包含哪些單位（可複選）</label>
+      <div class="chips" id="mg_units">
+        ${UNITS.map(u=>`<label class="chip-ck ${Sa.mergeSel.includes(u.code)?'sel':''}" onclick="toggleMgUnit('${u.code}',this)">${esc(u.name)}（${u.code}）</label>`).join('')}
+      </div>
+      <div class="inline" style="margin-top:14px">
+        ${editing?`<button class="btn ghost" style="flex:1" onclick="cancelMerge()">取消編輯</button>`:''}
+        <button class="btn" style="flex:2" onclick="saveMerge()">${editing?'更新群組':'建立群組'}</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-h">現有合併群組（${merges.length}）</div>
+      ${merges.map(m=>`<div class="row-item">
+        <div class="thumb">🏢</div>
+        <div class="row-body"><div class="t">${esc(m.name)}</div>
+          <div class="s">${(m.units||[]).map(unitLabel).join('、')||'（未選單位）'}</div></div>
+        <div class="rowbtns">
+          <button class="btn sec sm" onclick="editMergeGroup('${m.id}')">編輯</button>
+          <button class="btn danger sm" onclick="delMergeGroup('${m.id}')">刪除</button>
+        </div>
+      </div>`).join('')||'<div class="empty">尚無合併群組</div>'}
+      <div class="sect" style="margin-top:16px">各單位目前人數</div>
+      <div class="badges">${UNITS.map(u=>`<span class="badge ${counts[u.code]?'on':'locked'}">${esc(u.name)}(${u.code}) ${counts[u.code]||0}人${grouped.has(u.code)?' 🔗':''}</span>`).join('')}</div>
+    </div>
+  </div>`;
+}
+function toggleMgUnit(code, el){
+  const i=Sa.mergeSel.indexOf(code);
+  if(i<0){ Sa.mergeSel.push(code); el.classList.add('sel'); }
+  else { Sa.mergeSel.splice(i,1); el.classList.remove('sel'); }
+}
+function editMergeGroup(id){ const m=Sa.merges.find(x=>x.id===id); if(!m)return; Sa.editMerge=m; Sa.mergeSel=[...(m.units||[])]; window.scrollTo(0,0); render(); }
+function cancelMerge(){ Sa.editMerge=null; Sa.mergeSel=[]; render(); }
+async function saveMerge(){
+  const name=(document.getElementById('mg_name').value||'').trim();
+  if(!name){ toast('請輸入群組名稱'); return; }
+  if(!Sa.mergeSel.length){ toast('請至少選一個單位'); return; }
+  try{
+    await DB.saveUnitMerge({ id:Sa.editMerge?Sa.editMerge.id:null, name, units:[...Sa.mergeSel] });
+    Sa.merges=await DB.loadUnitMerges(); Sa.editMerge=null; Sa.mergeSel=[]; toast('已儲存'); render();
+  }catch(e){ toast('儲存失敗：'+e.message); }
+}
+async function delMergeGroup(id){
+  if(!confirm('確定刪除此合併群組？（單位與員工資料不會被刪除）')) return;
+  try{ await DB.deleteUnitMerge(id); Sa.merges=await DB.loadUnitMerges(); toast('已刪除'); render(); }catch(e){ toast('刪除失敗：'+e.message); }
+}
 
 /* =====================================================================
    AI 設定（連線測試；金鑰保管於 Edge Function 後端）

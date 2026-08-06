@@ -15,8 +15,8 @@
 <div id="toast-host"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="supabase-client.js?v=13"></script>
-<script src="db.js?v=12"></script>
+<script src="supabase-client.js?v=14"></script>
+<script src="db.js?v=14"></script>
 <script>
 /* =====================================================================
    前台 index.html —— 員工登入 / 首頁 / 字卡 / 測驗 / 複習 / 排行
@@ -98,6 +98,8 @@ function renderRegister(){
       <div class="chips" id="rg_role">
         ${ROLES.filter(r=>r.key!=='admin').map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="radio" name="rgrole" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
       </div>
+      <label class="fld">所屬單位</label>
+      <select id="rg_unit"><option value="">— 請選擇單位 —</option>${['C','D','E'].map(z=>`<optgroup label="區 ${z}">${UNITS.filter(u=>u.zone===z).map(u=>`<option value="${u.code}">${esc(u.name)}（${u.code}）</option>`).join('')}</optgroup>`).join('')}</select>
       <label class="fld">設定密碼（至少 6 碼）</label>
       <input id="rg_pw" type="password" placeholder="設定你的密碼">
       <label class="fld">再次輸入密碼</label>
@@ -116,14 +118,16 @@ async function doRegister(){
   const id=(document.getElementById('rg_id').value||'').trim().toUpperCase();
   const name=(document.getElementById('rg_name').value||'').trim();
   const role=(document.querySelector('#rg_role input:checked')||{}).value;
+  const unit=document.getElementById('rg_unit').value||'';
   const pw=document.getElementById('rg_pw').value||'', pw2=document.getElementById('rg_pw2').value||'';
   if(!/^H\d{4}$/.test(id)) return rgMsg('員工編號須為 H + 4 碼數字（例：H0123）');
   if(!name) return rgMsg('請輸入姓名');
   if(!role) return rgMsg('請選擇職類');
+  if(!unit) return rgMsg('請選擇所屬單位');
   if(pw.length<6) return rgMsg('密碼至少 6 碼');
   if(pw!==pw2) return rgMsg('兩次輸入的密碼不一致');
   const btn=document.getElementById('rg_btn'); btn.disabled=true; btn.textContent='建立中…';
-  try{ await Auth.register(id, name, role, pw); await route(); }
+  try{ await Auth.register(id, name, role, pw, unit); await route(); }
   catch(e){ rgMsg(e.message); btn.disabled=false; btn.textContent='建立帳號'; }
 }
 
