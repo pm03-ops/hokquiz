@@ -90,13 +90,17 @@ function renderRegister(){
       <div class="tag2">註冊新帳號</div></div>
     <div class="card">
       <div class="card-h">📝 註冊</div>
-      <label class="fld">員工編號（H + 4 碼，例：H0123）</label>
-      <input id="rg_id" placeholder="H0123" maxlength="5" oninput="this.value=this.value.toUpperCase()">
+      <label class="fld">員工編號（H＝台籍、<b>T＝外籍</b>，例：H0123 / T0123）</label>
+      <input id="rg_id" placeholder="H0123 或 T0123" maxlength="5" oninput="this.value=this.value.toUpperCase();syncRgForeign()">
       <label class="fld">姓名</label>
       <input id="rg_name" placeholder="輸入你的姓名">
       <label class="fld">職類</label>
       <div class="chips" id="rg_role">
         ${ROLES.filter(r=>r.key!=='admin').map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="radio" name="rgrole" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
+      </div>
+      <div id="rg_lang_wrap" style="display:none">
+        <label class="fld">語言（外籍照服）</label>
+        <select id="rg_lang">${LANGS.map(l=>`<option value="${l.key}">${l.flag} ${l.name}</option>`).join('')}</select>
       </div>
       <label class="fld">所屬單位</label>
       <select id="rg_unit"><option value="">— 請選擇單位 —</option>${['C','D','E'].map(z=>`<optgroup label="區 ${z}">${UNITS.filter(u=>u.zone===z).map(u=>`<option value="${u.code}">${esc(u.name)}（${u.code}）</option>`).join('')}</optgroup>`).join('')}</select>
@@ -111,7 +115,20 @@ function renderRegister(){
   </div></div>`;
   document.querySelectorAll('#rg_role input').forEach(rb=>{ rb.onchange=()=>{
     document.querySelectorAll('#rg_role .chip-ck').forEach(x=>x.classList.remove('sel'));
-    rb.closest('.chip-ck').classList.add('sel'); }; });
+    rb.closest('.chip-ck').classList.add('sel'); syncRgForeign(); }; });
+}
+/* 註冊：T 開頭自動勾外籍；外籍才顯示語言 */
+function syncRgForeign(){
+  const idEl=document.getElementById('rg_id'); if(!idEl) return;
+  const id=(idEl.value||'').trim().toUpperCase();
+  const fr=document.querySelector('#rg_role input[value="foreign_care"]');
+  if(id.charAt(0)==='T' && fr && !fr.checked){
+    fr.checked=true;
+    document.querySelectorAll('#rg_role .chip-ck').forEach(x=>x.classList.remove('sel'));
+    fr.closest('.chip-ck').classList.add('sel');
+  }
+  const wrap=document.getElementById('rg_lang_wrap');
+  if(wrap) wrap.style.display=(fr&&fr.checked)?'':'none';
 }
 function rgMsg(m){ const el=document.getElementById('rg_msg'); if(el) el.innerHTML=`<div class="fb b" style="margin-top:12px">❌ ${esc(m)}</div>`; }
 async function doRegister(){
@@ -120,14 +137,17 @@ async function doRegister(){
   const role=(document.querySelector('#rg_role input:checked')||{}).value;
   const unit=document.getElementById('rg_unit').value||'';
   const pw=document.getElementById('rg_pw').value||'', pw2=document.getElementById('rg_pw2').value||'';
-  if(!/^H\d{4}$/.test(id)) return rgMsg('員工編號須為 H + 4 碼數字（例：H0123）');
+  if(!/^[HT]\d{4}$/.test(id)) return rgMsg('員工編號須為 H 或 T + 4 碼數字（H台籍／T外籍）');
   if(!name) return rgMsg('請輸入姓名');
   if(!role) return rgMsg('請選擇職類');
+  if(role==='foreign_care' && id.charAt(0)!=='T') return rgMsg('外籍照服請使用 T 開頭的員工編號');
+  if(id.charAt(0)==='T' && role!=='foreign_care') return rgMsg('T 開頭為外籍員工，職類請選「外籍照服」');
   if(!unit) return rgMsg('請選擇所屬單位');
   if(pw.length<6) return rgMsg('密碼至少 6 碼');
   if(pw!==pw2) return rgMsg('兩次輸入的密碼不一致');
+  const lang = role==='foreign_care' ? (document.getElementById('rg_lang').value||'vi') : 'zh';
   const btn=document.getElementById('rg_btn'); btn.disabled=true; btn.textContent='建立中…';
-  try{ await Auth.register(id, name, role, pw, unit); await route(); }
+  try{ await Auth.register(id, name, role, pw, unit, lang); await route(); }
   catch(e){ rgMsg(e.message); btn.disabled=false; btn.textContent='建立帳號'; }
 }
 
