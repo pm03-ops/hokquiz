@@ -23,7 +23,7 @@
    資料來自 Supabase（管理員權限一次載入）。僅限 role=admin。
    圖表全部用內建 SVG / CSS，無外部函式庫。
    ===================================================================== */
-const Sr = { tab:'overview', range:30 };
+const Sr = { tab:'overview', range:30, audience:'all' };
 const DAY = 86400000;
 const root=()=>document.getElementById('root');
 
@@ -63,8 +63,8 @@ async function boot(){
 }
 
 /* ---------- 資料存取 ---------- */
-const staff = () => RR.profiles.filter(u=>u.role!=='admin');
-const staffRoles = () => ['care','social','nurse'];
+const staff = () => RR.profiles.filter(u=>u.role!=='admin' && (Sr.audience!=='foreign' || isForeignRole(u.role)));
+const staffRoles = () => Sr.audience==='foreign' ? ['foreign_care'] : ['care','social','nurse'];
 const quizById = id => RR.quizzes.find(q=>q.id===id);
 const userById = id => RR.profiles.find(u=>u.id===id);
 const questionsOf = qid => RR.questions.filter(q=>q.quiz_id===qid);
@@ -253,11 +253,17 @@ function render(){
       <span class="mini" style="align-self:center;margin-right:4px">期間：</span>
       ${RANGES.map(r=>`<button class="${Sr.range===r.d?'on':''}" style="padding:7px 13px;font-size:13px" onclick="setRange(${r.d})">${r.n}</button>`).join('')}
     </div>
-    <div class="content" style="padding-bottom:40px">${body}</div>
+    <div class="tabnav" style="padding-top:8px">
+      <span class="mini" style="align-self:center;margin-right:4px">對象：</span>
+      <button class="${Sr.audience==='all'?'on':''}" style="padding:7px 13px;font-size:13px" onclick="setAudience('all')">全部員工</button>
+      <button class="${Sr.audience==='foreign'?'on':''}" style="padding:7px 13px;font-size:13px" onclick="setAudience('foreign')">🌏 外籍追蹤</button>
+    </div>
+    <div class="content" style="padding-bottom:40px">${Sr.audience==='foreign'?'<div class="admin-hint">🌏 目前為<b>外籍員工追蹤</b>範圍（越南＋印尼），與全體報表共用同一套指標，未來調整會同步兩邊。</div>':''}${body}</div>
   </div>`;
 }
 function goTab(k){ Sr.tab=k; window.scrollTo(0,0); render(); }
 function setRange(d){ Sr.range=d; render(); }
+function setAudience(a){ Sr.audience=a; render(); }
 
 function viewOverview(){
   const trend=dailyTrend();

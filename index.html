@@ -23,7 +23,7 @@
    資料來自 Supabase（db.js / Auth）。
    ===================================================================== */
 
-const S = { view:'home', play:null, flash:null, study:null };
+const S = { view:'home', play:null, flash:null, study:null, mode:null };
 const root=()=>document.getElementById('root');
 const me =()=>DB.me();
 
@@ -183,9 +183,30 @@ function renderAdminLanding(){
    員工介面殼
    ===================================================================== */
 function render(){
+  const u=me();
+  // 外籍員工：登入後先選「語言學習／技術學習」才進入
+  if(u && isForeignRole(u.role) && !S.mode){ renderForeignChooser(); return; }
   ({home:renderHome, learn:renderLearn, quizzes:renderQuizList,
     review:renderReview, leaderboard:renderLeaderboard }[S.view]||renderHome)();
 }
+/* 目前登入者可見的測驗（外籍依語言＋所選模式過濾） */
+function visibleQuizzes(){
+  const u=me(); if(!u) return [];
+  if(u.role==='admin') return DB.quizzes();
+  if(isForeignRole(u.role)) return DB.foreignQuizzes(u.lang||'vi', S.mode||undefined);
+  return DB.quizzesFor(u.role);
+}
+/* 外籍：語言學習／技術學習 二選一 */
+function renderForeignChooser(){
+  const u=me(), l=langOf(u.lang);
+  root().innerHTML=`<div class="shell"><div class="content" style="padding-top:36px">
+    <div class="greet">嗨，${esc(u.name)} 👋<span class="sub">${l.flag} ${l.name} · 請選擇今天要學什麼</span></div>
+    <div class="card" style="margin-top:16px"><button class="btn block" style="padding:18px;font-size:17px" onclick="setMode('skill')">📘 技術學習（照護知識）</button></div>
+    <div class="card"><button class="btn sec block" style="padding:18px;font-size:17px" onclick="setMode('language')">🈶 語言學習（學中文）</button></div>
+    <div class="note center" style="margin-top:16px"><button class="btn ghost" onclick="Auth.logout().then(()=>renderLogin())">⏻ 登出</button></div>
+  </div></div>`;
+}
+function setMode(m){ S.mode=m; S.view='home'; window.scrollTo(0,0); render(); }
 function shell(inner, tab){
   const u=me(), r=roleOf(u.role);
   const tabs=[{k:'home',e:'🏠',n:'首頁'},{k:'learn',e:'📚',n:'學習'},{k:'quizzes',e:'📝',n:'測驗'},{k:'review',e:'🔁',n:'複習'},{k:'leaderboard',e:'🏆',n:'排行'}];
@@ -209,9 +230,15 @@ function shell(inner, tab){
 function renderHome(){
   const u=me(), t=todayNum();
   const due=DB.dueReviews(t).length;
-  const quizzes=DB.quizzesFor(u.role);
+  const quizzes=visibleQuizzes();
+  const fchip = isForeignRole(u.role)
+    ? `<div class="card" style="margin-top:12px;display:flex;align-items:center;gap:10px">
+        <div class="thumb">${kindOf(S.mode).emoji}</div>
+        <div class="row-body"><div class="t">${kindOf(S.mode).name}</div><div class="s">${langOf(u.lang).flag} ${langOf(u.lang).name}</div></div>
+        <button class="btn sec sm" onclick="S.mode=null;render()">切換</button></div>` : '';
   root().innerHTML=shell(`
     <div class="greet">嗨，${esc(u.name)} 👋<span class="sub">${roleOf(u.role).emoji} ${roleName(u.role)} · 今天也一起學習吧</span></div>
+    ${fchip}
     <div class="stats" style="margin-top:16px">
       <div class="tile"><div class="ic teal">⭐</div><div class="num">${u.points}</div><div class="lbl">總積分</div></div>
       <div class="tile"><div class="ic amber">🔥</div><div class="num">${u.streak}</div><div class="lbl">連續天數</div></div>
@@ -252,7 +279,7 @@ function quizRow(q, showFlash){
    字卡（先學）—— 獨立區：顯示題目 + 正解 + 詳細解說
    ===================================================================== */
 function renderLearn(){
-  const quizzes=DB.quizzesFor(me().role);
+  const quizzes=visibleQuizzes();
   root().innerHTML=shell(`
     <div class="sect">📚 學習</div>
     <div class="admin-hint">💡 兩種學習方式：<b>📖 課本</b>把重點與答案完整列出讓你先讀熟；<b>📇 字卡</b>正面題目、翻面看答案，用來複習與自我檢測。</div>
@@ -366,7 +393,7 @@ function renderFlashDone(){
    測驗列表
    ===================================================================== */
 function renderQuizList(){
-  const u=me(), quizzes=DB.quizzesFor(u.role);
+  const u=me(), quizzes=visibleQuizzes();
   root().innerHTML=shell(`
     <div class="sect">📝 全部測驗</div>
     <div class="admin-hint">💡 測驗會即時評分並記錄成績；作答時看不到正解，答完才會顯示對錯與重點提示。</div>
