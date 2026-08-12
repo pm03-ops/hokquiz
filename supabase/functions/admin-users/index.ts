@@ -20,7 +20,7 @@ const json = (body: unknown) =>
   new Response(JSON.stringify(body), { status: 200, headers: { ...cors, "Content-Type": "application/json" } });
 
 const EMAIL_SUFFIX = "@clinic.local";
-const ROLES = ["care", "social", "nurse", "admin"];
+const ROLES = ["care", "social", "nurse", "admin", "foreign_care"];
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });

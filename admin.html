@@ -79,7 +79,34 @@ function bindChips(){
   document.querySelectorAll('#nq_roles input, #niq_roles input').forEach(cb=>{
     cb.onchange=()=>cb.closest('.chip-ck').classList.toggle('sel', cb.checked); });
   document.querySelectorAll('#nu_role input').forEach(rb=>{
-    rb.onchange=()=>{ document.querySelectorAll('#nu_role .chip-ck').forEach(x=>x.classList.remove('sel')); rb.closest('.chip-ck').classList.add('sel'); }; });
+    rb.onchange=()=>{ document.querySelectorAll('#nu_role .chip-ck').forEach(x=>x.classList.remove('sel')); rb.closest('.chip-ck').classList.add('sel'); if(typeof syncNuForeign==='function') syncNuForeign(); }; });
+}
+/* 帳號表單：T 開頭自動勾外籍；外籍才顯示語言選單 */
+function syncNuForeign(){
+  const idEl=document.getElementById('nu_id'); if(!idEl) return;
+  const id=(idEl.value||'').trim().toUpperCase();
+  const fr=document.querySelector('#nu_role input[value="foreign_care"]');
+  if(id.charAt(0)==='T' && fr && !fr.checked){
+    fr.checked=true;
+    document.querySelectorAll('#nu_role .chip-ck').forEach(x=>x.classList.remove('sel'));
+    fr.closest('.chip-ck').classList.add('sel');
+  }
+  const wrap=document.getElementById('nu_lang_wrap');
+  if(wrap) wrap.style.display = (fr && fr.checked) ? '' : 'none';
+}
+/* 用獨立、不持久化的 client 驗證「另一位管理員」帳密，不影響目前登入 */
+async function verifyAdminCredentials(empId, password){
+  let tmp;
+  try{
+    tmp=window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON, { auth:{ persistSession:false, autoRefreshToken:false, storageKey:'verify_'+Date.now() } });
+    const { data, error }=await tmp.auth.signInWithPassword({ email:empIdToEmail(empId), password });
+    if(error) return { ok:false, msg:'帳號或密碼錯誤' };
+    const uid=data.user && data.user.id;
+    const { data:prof }=await tmp.from('profiles').select('role,name').eq('id',uid).single();
+    const ok=!!prof && prof.role==='admin';
+    return { ok, msg: ok?'':'此帳號不是管理員，無法授權', name: prof && prof.name };
+  }catch(e){ return { ok:false, msg:(e&&e.message)||'驗證失敗' }; }
+  finally{ if(tmp){ try{ await tmp.auth.signOut(); }catch(_){} } }
 }
 
 /* 測驗標籤：外籍顯示語言+類別；台籍顯示開放角色 */
@@ -279,16 +306,18 @@ function viewUsers(){
   <div class="cols2">
     <div class="card">
       <div class="card-h">👤 新增帳號</div>
-      <label class="fld">員工編號（H + 4 碼，例：H0002）</label>
-      <input id="nu_id" placeholder="H0002" maxlength="5" oninput="this.value=this.value.toUpperCase()">
+      <label class="fld">員工編號（H＝台籍、<b>T＝外籍</b>，例：H0002 / T0002）</label>
+      <input id="nu_id" placeholder="H0002 或 T0002" maxlength="5" oninput="this.value=this.value.toUpperCase();syncNuForeign()">
       <label class="fld">姓名</label>
       <input id="nu_name" placeholder="輸入員工姓名">
       <label class="fld">角色</label>
       <div class="chips" id="nu_role">
         ${ROLES.map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="radio" name="nurole" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
       </div>
-      <label class="fld">語言（僅「外籍照服」適用）</label>
-      <select id="nu_lang">${LANGS.map(l=>`<option value="${l.key}">${l.flag} ${l.name}</option>`).join('')}</select>
+      <div id="nu_lang_wrap" style="display:none">
+        <label class="fld">語言（外籍照服）</label>
+        <select id="nu_lang">${LANGS.map(l=>`<option value="${l.key}">${l.flag} ${l.name}</option>`).join('')}</select>
+      </div>
       <label class="fld">所屬單位（管理員可留空）</label>
       <select id="nu_unit"><option value="">— 選擇單位 —</option>${['C','D','E'].map(z=>`<optgroup label="區 ${z}">${UNITS.filter(u=>u.zone===z).map(u=>`<option value="${u.code}">${esc(u.name)}（${u.code}）</option>`).join('')}</optgroup>`).join('')}</select>
       <label class="fld">預設密碼（至少 6 碼）</label>
@@ -317,10 +346,21 @@ async function createStaff(){
   const role=(document.querySelector('#nu_role input:checked')||{}).value;
   const password=document.getElementById('nu_pw').value||'';
   const unit=document.getElementById('nu_unit').value||'';
-  if(!/^H\d{4}$/.test(employeeId)){ toast('員工編號須為 H + 4 碼數字'); return; }
+  if(!/^[HT]\d{4}$/.test(employeeId)){ toast('員工編號須為 H 或 T + 4 碼數字（H台籍／T外籍）'); return; }
   if(!name){ toast('請輸入姓名'); return; }
   if(!role){ toast('請選擇角色'); return; }
   if(password.length<6){ toast('預設密碼至少 6 碼'); return; }
+  // 防呆：H 開頭（台籍慣例）卻設為「外籍照服」→ 需另一位管理員授權才能儲存
+  if(role==='foreign_care' && employeeId.charAt(0)==='H'){
+    const admId=prompt('⚠️ 防呆確認\n此帳號為 H 開頭（台籍慣例）卻設為「外籍照服」。\n需另一位管理員授權才能儲存。\n\n請輸入授權管理員的員工編號：');
+    if(!admId){ toast('已取消'); return; }
+    const admPw=prompt('請輸入該管理員的密碼：');
+    if(!admPw){ toast('已取消'); return; }
+    toast('驗證授權中…');
+    const v=await verifyAdminCredentials(admId.trim().toUpperCase(), admPw);
+    if(!v.ok){ toast('❌ 授權失敗：'+v.msg); return; }
+    toast('✅ 已由 '+(v.name||admId)+' 授權，繼續建立');
+  }
   const btn=document.getElementById('nu_btn'); btn.disabled=true; btn.textContent='建立中…';
   try{
     const res=await adminUsers('create', { employeeId, name, role, password });
