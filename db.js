@@ -9,13 +9,29 @@
 
 /* ---------- 角色 ---------- */
 const ROLES = [
-  { key:'care',   name:'照服員', emoji:'🧑‍🦽', color:'#0f9d8f' },
-  { key:'social', name:'社工',   emoji:'🤝',   color:'#6366f1' },
-  { key:'nurse',  name:'護理師', emoji:'👩‍⚕️', color:'#e11d78' },
-  { key:'admin',  name:'管理員', emoji:'🛠️',   color:'#475569' },
+  { key:'care',         name:'照服員',   emoji:'🧑‍🦽', color:'#0f9d8f' },
+  { key:'social',       name:'社工',     emoji:'🤝',   color:'#6366f1' },
+  { key:'nurse',        name:'護理師',   emoji:'👩‍⚕️', color:'#e11d78' },
+  { key:'foreign_care', name:'外籍照服', emoji:'🌏',   color:'#d97706', foreign:true },
+  { key:'admin',        name:'管理員',   emoji:'🛠️',   color:'#475569' },
 ];
 const roleOf   = k => ROLES.find(r=>r.key===k) || {name:k,color:'#888',emoji:'👤'};
 const roleName = k => roleOf(k).name;
+const isForeignRole = k => !!(roleOf(k)||{}).foreign;
+
+/* ---------- 語言（外籍） ---------- */
+const LANGS = [
+  { key:'vi', name:'越南文', flag:'🇻🇳' },
+  { key:'id', name:'印尼文', flag:'🇮🇩' },
+];
+const langOf   = k => LANGS.find(l=>l.key===k) || { key:k, name:(k==='zh'?'中文':k||'—'), flag:'' };
+const langName = k => langOf(k).name;
+/* 測驗類別（僅外籍有語言學習） */
+const KINDS = [
+  { key:'skill',    name:'技術學習', emoji:'📘' },
+  { key:'language', name:'語言學習', emoji:'🈶' },
+];
+const kindOf = k => KINDS.find(x=>x.key===k) || KINDS[0];
 
 /* ---------- 單位（機構）預設清單 ---------- */
 const UNITS = [
@@ -149,6 +165,13 @@ const DB = {
   quizzes(){ return this.cache.quizzes; },
   quiz(id){ return this.cache.quizzes.find(q=>q.id===id); },
   quizzesFor(role){ return role==='admin'? this.cache.quizzes : this.cache.quizzes.filter(q=>(q.roles||[]).includes(role)); },
+  /** 外籍測驗清單：依語言(必)與類別(選) */
+  foreignQuizzes(lang, kind){ return this.cache.quizzes.filter(q=>q.audience==='foreign' && q.lang===lang && (!kind || (q.kind||'skill')===kind)); },
+  /** 目前登入者實際可見的測驗（台籍依角色；外籍再依語言過濾） */
+  quizzesForUser(){ const u=this.me()||{}; if(u.role==='admin') return this.cache.quizzes;
+    let list=this.cache.quizzes.filter(q=>(q.roles||[]).includes(u.role));
+    if(isForeignRole(u.role)) list=list.filter(q=>q.lang===(u.lang||'vi'));
+    return list; },
   quizQuestions(quizId){ return this.cache.quizQuestions[quizId]||[]; },
   flash(quizId){ return this.cache.flash[quizId]||[]; },
   badgeDefs(){ return this.cache.badgeDefs; },
@@ -202,8 +225,11 @@ const DB = {
   questionsOf(quizId){ return this.cache.allQuestions.filter(q=>q.quiz_id===quizId); },
   question(id){ return this.cache.allQuestions.find(q=>q.id===id); },
 
-  async addQuiz({title, descr, emoji, roles}){
-    const { data, error } = await sb.from('quizzes').insert({title, descr:descr||'', emoji:emoji||'📘', roles}).select().single();
+  async addQuiz({title, descr, emoji, roles, audience, lang, kind}){
+    const { data, error } = await sb.from('quizzes').insert({
+      title, descr:descr||'', emoji:emoji||'📘', roles,
+      audience:audience||'local', lang:lang||'zh', kind:kind||'skill'
+    }).select().single();
     if(error) throw error; this.cache.quizzes.push(data); return data;
   },
   async delQuiz(id){
@@ -212,9 +238,9 @@ const DB = {
     this.cache.quizzes = this.cache.quizzes.filter(q=>q.id!==id);
     this.cache.allQuestions = this.cache.allQuestions.filter(q=>q.quiz_id!==id);
   },
-  async addQuestion({quiz_id, stem, correct, distractors, explain, quiz_note, flash_answer}){
+  async addQuestion({quiz_id, stem, correct, distractors, explain, quiz_note, flash_answer, lang}){
     const { data, error } = await sb.from('questions')
-      .insert({quiz_id, stem, correct, distractors, explain:explain||'', quiz_note:quiz_note||'', flash_answer:flash_answer||''}).select().single();
+      .insert({quiz_id, stem, correct, distractors, explain:explain||'', quiz_note:quiz_note||'', flash_answer:flash_answer||'', lang:lang||'zh'}).select().single();
     if(error) throw error; this.cache.allQuestions.push(data); return data;
   },
   async updateQuestion(id, patch){
@@ -234,6 +260,11 @@ const DB = {
   },
   async setUserUnit(userId, unit){
     const { error } = await sb.from('profiles').update({ unit: unit||'' }).eq('id', userId);
+    if(error) throw error;
+  },
+  /** 設定員工語言（外籍照服用；管理員 RLS 可直接更新 profiles） */
+  async setUserLang(userId, lang){
+    const { error } = await sb.from('profiles').update({ lang: lang||'zh' }).eq('id', userId);
     if(error) throw error;
   },
 
@@ -283,10 +314,11 @@ async function adminUsers(action, payload){
   if(data && data.error) throw new Error(data.error);
   return data;
 }
-async function aiDistractors(stem, correct){ return (await aiInvoke('distractors', {stem, correct})).distractors; }
-async function aiExplain(stem, correct, distractors){ return (await aiInvoke('explain', {stem, correct, distractors})).explain; }
-async function aiFlashAnswer(stem, correct){ return (await aiInvoke('flash', {stem, correct})).flashAnswer; }
-async function aiQuestionsFromText(text, n){ return (await aiInvoke('questions', {text, n})).questions; }
+// opts 可帶 { lang:'vi'|'id', kind:'skill'|'language', translate:true }（供外籍出題／翻譯／學中文用）
+async function aiDistractors(stem, correct, opts){ return (await aiInvoke('distractors', {stem, correct, ...(opts||{})})).distractors; }
+async function aiExplain(stem, correct, distractors, opts){ return (await aiInvoke('explain', {stem, correct, distractors, ...(opts||{})})).explain; }
+async function aiFlashAnswer(stem, correct, opts){ return (await aiInvoke('flash', {stem, correct, ...(opts||{})})).flashAnswer; }
+async function aiQuestionsFromText(text, n, opts){ return (await aiInvoke('questions', {text, n, ...(opts||{})})).questions; }
 
 /* =====================================================================
    檔案內容擷取 —— .txt/.md/.csv/.tsv、Word(.docx)、Excel(.xlsx)

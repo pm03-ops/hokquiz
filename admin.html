@@ -23,7 +23,11 @@
    僅限管理員（role=admin）。非管理員一律導回前台登入。
    ===================================================================== */
 
-const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', impN:'auto', drafts:[], draftQuiz:null, newQuizOpen:false, merges:[], editMerge:null, mergeSel:[] };
+const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', impN:'auto', drafts:[], draftQuiz:null, newQuizOpen:false, merges:[], editMerge:null, mergeSel:[],
+  // 新增測驗表單（支援台籍/外籍）
+  nqTitle:'', nqDesc:'', nqAudience:'local', nqLang:'vi', nqKind:'skill',
+  // AI 匯入產生的草稿批次語言（zh=一般；vi/id=外語）＋類別
+  draftLang:'zh', draftKind:'skill' };
 function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'', quizNote:'', flashAnswer:'' }; }
 resetK();
 const root=()=>document.getElementById('root');
@@ -78,6 +82,14 @@ function bindChips(){
     rb.onchange=()=>{ document.querySelectorAll('#nu_role .chip-ck').forEach(x=>x.classList.remove('sel')); rb.closest('.chip-ck').classList.add('sel'); }; });
 }
 
+/* 測驗標籤：外籍顯示語言+類別；台籍顯示開放角色 */
+function quizTags(q){
+  if(q && q.audience==='foreign'){
+    return `<span class="tag amber">🌏 ${langOf(q.lang).flag} ${langName(q.lang)}</span><span class="tag">${kindOf(q.kind).emoji} ${kindOf(q.kind).name}</span>`;
+  }
+  return (q.roles||[]).map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('');
+}
+
 /* =====================================================================
    測驗管理
    ===================================================================== */
@@ -87,14 +99,29 @@ function viewQuizzes(){
   <div class="cols2">
     <div class="card">
       <div class="card-h">➕ 新增測驗</div>
-      <label class="fld">測驗名稱</label>
-      <input id="nq_title" placeholder="例如：跌倒預防">
-      <label class="fld">說明</label>
-      <input id="nq_desc" placeholder="例如：全體員工共同必考">
-      <label class="fld">開放對象（可複選）</label>
-      <div class="chips" id="nq_roles">
-        ${ROLES.filter(r=>r.key!=='admin').map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="checkbox" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
+      <label class="fld">對象</label>
+      <div class="chips">
+        <div class="chip-ck ${Sa.nqAudience==='local'?'sel':''}" onclick="setNqAudience('local')">🏠 台籍／一般</div>
+        <div class="chip-ck ${Sa.nqAudience==='foreign'?'sel':''}" onclick="setNqAudience('foreign')">🌏 外籍</div>
       </div>
+      <label class="fld">測驗名稱</label>
+      <input id="nq_title" value="${esc(Sa.nqTitle)}" oninput="Sa.nqTitle=this.value" placeholder="例如：跌倒預防">
+      <label class="fld">說明</label>
+      <input id="nq_desc" value="${esc(Sa.nqDesc)}" oninput="Sa.nqDesc=this.value" placeholder="例如：全體員工共同必考">
+      ${Sa.nqAudience==='local' ? `
+        <label class="fld">開放對象（可複選）</label>
+        <div class="chips" id="nq_roles">
+          ${ROLES.filter(r=>r.key!=='admin' && !r.foreign).map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="checkbox" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
+        </div>` : `
+        <label class="fld">語言</label>
+        <div class="chips">
+          ${LANGS.map(l=>`<div class="chip-ck ${Sa.nqLang===l.key?'sel':''}" onclick="Sa.nqLang='${l.key}';render()">${l.flag} ${l.name}</div>`).join('')}
+        </div>
+        <label class="fld">類別</label>
+        <div class="chips">
+          ${KINDS.map(k=>`<div class="chip-ck ${Sa.nqKind===k.key?'sel':''}" onclick="Sa.nqKind='${k.key}';render()">${k.emoji} ${k.name}</div>`).join('')}
+        </div>
+        <div class="note" style="color:var(--accent-dk)">🔒 外籍測驗自動鎖定為「外籍照服」專屬，不可混台籍。</div>` }
       <button class="btn block" style="margin-top:16px" onclick="createQuiz()">建立測驗</button>
     </div>
     <div class="card">
@@ -104,18 +131,27 @@ function viewQuizzes(){
           <div class="thumb">${q.emoji||'📘'}</div>
           <div class="row-body"><div class="t">${esc(q.title)}</div>
             <div class="s">${esc(q.descr||'')} · ${n} 題</div>
-            <div class="tags">${(q.roles||[]).map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</div></div>
+            <div class="tags">${quizTags(q)}</div></div>
           <button class="btn danger sm" onclick="removeQuiz('${q.id}')">刪除</button>
         </div>`; }).join('') || '<div class="empty">尚無測驗</div>'}
     </div>
   </div>`;
 }
+function setNqAudience(a){ Sa.nqAudience=a; render(); }
 async function createQuiz(){
-  const title=document.getElementById('nq_title').value.trim();
+  const title=(Sa.nqTitle||'').trim();
   if(!title){ toast('請輸入測驗名稱'); return; }
-  const roles=[...document.querySelectorAll('#nq_roles input:checked')].map(c=>c.value);
-  if(!roles.length){ toast('請至少選一個開放對象'); return; }
-  try{ await DB.addQuiz({ title, descr:document.getElementById('nq_desc').value.trim(), emoji:'📘', roles }); toast('測驗已建立'); render(); }
+  const descr=(Sa.nqDesc||'').trim();
+  try{
+    if(Sa.nqAudience==='foreign'){
+      await DB.addQuiz({ title, descr, emoji:kindOf(Sa.nqKind).emoji, roles:['foreign_care'], audience:'foreign', lang:Sa.nqLang, kind:Sa.nqKind });
+    } else {
+      const roles=[...document.querySelectorAll('#nq_roles input:checked')].map(c=>c.value);
+      if(!roles.length){ toast('請至少選一個開放對象'); return; }
+      await DB.addQuiz({ title, descr, emoji:'📘', roles, audience:'local', lang:'zh', kind:'skill' });
+    }
+    Sa.nqTitle=''; Sa.nqDesc=''; toast('測驗已建立'); render();
+  }
   catch(e){ toast('建立失敗：'+e.message); }
 }
 async function removeQuiz(id){
@@ -148,7 +184,7 @@ function viewQuizPicker(){
         <div class="thumb">${q.emoji||'📘'}</div>
         <div class="row-body"><div class="t">${esc(q.title)}</div>
           <div class="s">${esc(q.descr||'')} · ${n} 題</div>
-          <div class="tags">${(q.roles||[]).map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</div></div>
+          <div class="tags">${quizTags(q)}</div></div>
         <button class="btn sm" onclick="openQuizEditor('${q.id}')">出題 →</button>
       </div>`; }).join('')}
   </div>`;
@@ -162,7 +198,7 @@ function viewQuizEditor(){
   <div class="crumb">
     <button class="back" onclick="backToPicker()">← 所有測驗</button>
     <span class="cur">${quiz.emoji||'📘'} ${esc(quiz.title)}</span>
-    <span class="tags">${(quiz.roles||[]).map(r=>`<span class="tag teal">${roleName(r)}</span>`).join('')}</span>
+    <span class="tags">${quizTags(quiz)}</span>
   </div>
 
   <div class="card">
@@ -223,7 +259,8 @@ async function saveKahoot(){
   if(!stem){ toast('請輸入題目'); return; }
   if(!correct){ toast(`請填寫「答案 ${ci+1}」（目前圈選的正解格是空的）`); return; }
   if(distractors.some(x=>!x)){ toast('4 個答案格都要填寫'); return; }
-  const payload={ stem, correct, distractors, explain:(Sa.k.explain||'').trim(), quiz_note:(Sa.k.quizNote||'').trim(), flash_answer:(Sa.k.flashAnswer||'').trim() };
+  const qLang=(DB.quiz(Sa.editQuiz)||{}).lang||'zh';
+  const payload={ stem, correct, distractors, explain:(Sa.k.explain||'').trim(), quiz_note:(Sa.k.quizNote||'').trim(), flash_answer:(Sa.k.flashAnswer||'').trim(), lang:qLang };
   try{
     if(Sa.k.qid){ await DB.updateQuestion(Sa.k.qid, payload); toast('題目已更新'); }
     else { await DB.addQuestion({ quiz_id:Sa.editQuiz, ...payload }); toast('題目已加入'); }
@@ -250,6 +287,8 @@ function viewUsers(){
       <div class="chips" id="nu_role">
         ${ROLES.map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="radio" name="nurole" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
       </div>
+      <label class="fld">語言（僅「外籍照服」適用）</label>
+      <select id="nu_lang">${LANGS.map(l=>`<option value="${l.key}">${l.flag} ${l.name}</option>`).join('')}</select>
       <label class="fld">所屬單位（管理員可留空）</label>
       <select id="nu_unit"><option value="">— 選擇單位 —</option>${['C','D','E'].map(z=>`<optgroup label="區 ${z}">${UNITS.filter(u=>u.zone===z).map(u=>`<option value="${u.code}">${esc(u.name)}（${u.code}）</option>`).join('')}</optgroup>`).join('')}</select>
       <label class="fld">預設密碼（至少 6 碼）</label>
@@ -286,6 +325,7 @@ async function createStaff(){
   try{
     const res=await adminUsers('create', { employeeId, name, role, password });
     if(res && res.id && unit){ try{ await DB.setUserUnit(res.id, unit); }catch(_){} }
+    if(res && res.id && role==='foreign_care'){ try{ await DB.setUserLang(res.id, document.getElementById('nu_lang').value||'vi'); }catch(_){} }
     Sa.profiles=await DB.allProfiles();
     toast(`已建立 ${employeeId}`); render();
   }catch(e){ toast('❌ '+e.message); btn.disabled=false; btn.textContent='建立帳號'; }
@@ -315,7 +355,7 @@ async function genKahootAI(){
   if(!correct){ toast('請先在正解那一格輸入答案，並圈選為正解'); return; }
   toast('🤖 AI 生成干擾項中…');
   try{
-    const d=await aiDistractors(Sa.k.stem, correct); let di=0;
+    const d=await aiDistractors(Sa.k.stem, correct, {lang:(DB.quiz(Sa.editQuiz)||{}).lang||'zh'}); let di=0;
     for(let i=0;i<4;i++){ if(i!==ci) Sa.k.answers[i]=d[di++]||''; }
     render(); toast('已生成，請審核');
   }catch(e){ toast('❌ '+e.message.slice(0,100)); }
@@ -326,7 +366,7 @@ async function genExplainKahoot(){
   if(!correct){ toast('請先填正解那一格並圈選'); return; }
   toast('🤖 生成教學解說中…');
   try{
-    Sa.k.explain=await aiExplain(stem, correct, Sa.k.answers.filter((_,i)=>i!==ci));
+    Sa.k.explain=await aiExplain(stem, correct, Sa.k.answers.filter((_,i)=>i!==ci), {lang:(DB.quiz(Sa.editQuiz)||{}).lang||'zh'});
     render(); toast('已生成教學解說，可再修改');
   }catch(e){ toast('❌ '+e.message.slice(0,100)); }
 }
@@ -334,7 +374,7 @@ async function genFlashKahoot(){
   const ci=Sa.k.correctIdx, correct=(Sa.k.answers[ci]||'').trim(), stem=(Sa.k.stem||'').trim();
   if(!correct){ toast('請先填正解那一格並圈選'); return; }
   toast('🤖 生成字卡完整答案中…');
-  try{ Sa.k.flashAnswer=await aiFlashAnswer(stem, correct); render(); toast('已生成，可再修改'); }
+  try{ Sa.k.flashAnswer=await aiFlashAnswer(stem, correct, {lang:(DB.quiz(Sa.editQuiz)||{}).lang||'zh'}); render(); toast('已生成，可再修改'); }
   catch(e){ toast('❌ '+e.message.slice(0,100)); }
 }
 
@@ -353,7 +393,15 @@ function viewImport(){
     <div class="inline" style="margin-top:12px;align-items:center">
       <label class="fld" style="margin:0">生成題數</label>
       <select onchange="Sa.impN=(this.value==='auto'?'auto':+this.value)" style="width:auto"><option value="auto" ${Sa.impN==='auto'?'selected':''}>🤖 自動判斷</option>${[3,5,8,10].map(n=>`<option value="${n}" ${Sa.impN===n?'selected':''}>${n} 題</option>`).join('')}</select>
-      <button class="btn amber" style="flex:1" onclick="genFromMaterial()">🤖 產生題目草稿</button>
+      <button class="btn amber" style="flex:1" onclick="genFromMaterial('zh','skill')">🤖 產生題目草稿（中文）</button>
+    </div>
+    <div class="note" style="margin-top:12px;color:var(--accent-dk)">🌏 外語題目（翻譯／已翻譯 · 只能加入對應語言的<b>外籍測驗</b>）</div>
+    <div class="inline">
+      ${LANGS.map(l=>`<button class="btn sec" onclick="genFromMaterial('${l.key}','skill')">${l.flag} 產出${l.name}題目</button>`).join('')}
+    </div>
+    <div class="note" style="margin-top:12px;color:var(--accent-dk)">🈶 語言學習·學中文（用母語出題問中文說法 · 加入外籍「語言學習」測驗）</div>
+    <div class="inline">
+      ${LANGS.map(l=>`<button class="btn sec" onclick="genFromMaterial('${l.key}','language')">${l.flag} ${l.name}母語學中文</button>`).join('')}
     </div>
   </div>
   ${draftsHTML()}`;
@@ -369,47 +417,60 @@ async function handleFiles(input){
   }
   input.value=''; render();
 }
-async function genFromMaterial(){
+/* 與草稿語言相容的測驗：zh→台籍測驗；vi/id→對應語言的外籍測驗 */
+function compatibleQuizzes(lang){
+  return lang==='zh'
+    ? DB.quizzes().filter(q=>(q.audience||'local')==='local')
+    : DB.quizzes().filter(q=>q.audience==='foreign' && q.lang===lang);
+}
+function firstCompatibleQuiz(lang){ const c=compatibleQuizzes(lang); return c[0]&&c[0].id; }
+async function genFromMaterial(lang, kind){
+  lang=lang||'zh'; kind=kind||'skill';
   const text=(Sa.material||'').trim();
   if(text.length<10){ toast('請先貼上或上傳教材內容'); return; }
   toast('🤖 AI 出題中…（可能需幾秒）');
   try{
-    const drafts=await aiQuestionsFromText(text, Sa.impN||5);
+    const drafts=await aiQuestionsFromText(text, Sa.impN||5, {lang, kind});
     if(!drafts.length){ toast('沒有生成題目，請調整教材內容'); return; }
-    Sa.drafts=drafts; if(!Sa.draftQuiz) Sa.draftQuiz=DB.quizzes()[0]&&DB.quizzes()[0].id;
-    render(); toast(`已生成 ${drafts.length} 題草稿，請審核`);
+    Sa.drafts=drafts; Sa.draftLang=lang; Sa.draftKind=kind; Sa.draftQuiz=firstCompatibleQuiz(lang);
+    render(); toast(`已生成 ${drafts.length} 題（${lang==='zh'?'中文':langName(lang)}）草稿，請審核`);
   }catch(e){ toast('❌ '+e.message.slice(0,100)); }
 }
 function draftsHTML(){
   if(!Sa.drafts.length) return '';
-  const quizzes=DB.quizzes(), noQuiz=!quizzes.length;
-  return `<div class="sect">題目草稿（${Sa.drafts.length}）· 編輯後加入</div>
+  const compat=compatibleQuizzes(Sa.draftLang), none=!compat.length;
+  const langLabelTxt = Sa.draftLang==='zh' ? '中文（台籍測驗）' : `${langOf(Sa.draftLang).flag} ${langName(Sa.draftLang)}（外籍測驗）`;
+  return `<div class="sect">題目草稿（${Sa.drafts.length}）· ${langLabelTxt}</div>
     <div class="card">
+      <div class="note" style="margin:0 0 8px">此批為 <b>${langLabelTxt}</b>，只能加入相同語言的測驗。</div>
       <label class="fld" style="margin-top:0">草稿要加入哪個測驗</label>
       <div class="inline" style="align-items:center">
-        <select style="flex:1;min-width:150px" onchange="Sa.draftQuiz=this.value" ${noQuiz?'disabled':''}>
-          ${noQuiz? '<option>— 尚無測驗，請先建立 —</option>'
-                  : quizzes.map(q=>`<option value="${q.id}" ${Sa.draftQuiz===q.id?'selected':''}>${esc(q.title)}</option>`).join('')}
+        <select style="flex:1;min-width:150px" onchange="Sa.draftQuiz=this.value" ${none?'disabled':''}>
+          ${none? `<option>— 尚無${Sa.draftLang==='zh'?'台籍':langName(Sa.draftLang)+'外籍'}測驗 —</option>`
+                : compat.map(q=>`<option value="${q.id}" ${Sa.draftQuiz===q.id?'selected':''}>${esc(q.title)}</option>`).join('')}
         </select>
         <button class="btn ${Sa.newQuizOpen?'ghost':'sec'}" onclick="toggleNewQuiz()">${Sa.newQuizOpen?'✕ 取消':'＋ 建立新測驗'}</button>
       </div>
       ${Sa.newQuizOpen? inlineNewQuizForm() : ''}
-      <button class="btn block" style="margin-top:12px" onclick="addAllDrafts()" ${noQuiz?'disabled':''}>✓ 全部加入題庫（${Sa.drafts.length}）</button>
-      ${noQuiz && !Sa.newQuizOpen? '<div class="note" style="color:var(--accent-dk);margin-top:8px">⚠️ 還沒有測驗——按上面「＋ 建立新測驗」即可直接在這裡建立並選用。</div>':''}
+      <button class="btn block" style="margin-top:12px" onclick="addAllDrafts()" ${none?'disabled':''}>✓ 全部加入題庫（${Sa.drafts.length}）</button>
+      ${none && !Sa.newQuizOpen? `<div class="note" style="color:var(--accent-dk);margin-top:8px">⚠️ 沒有相容的測驗——按上面「＋ 建立新測驗」會直接建立對應語言的測驗並選用。</div>`:''}
     </div>
     ${Sa.drafts.map((d,i)=>draftCard(d,i)).join('')}`;
 }
 function inlineNewQuizForm(){
+  const foreign = Sa.draftLang!=='zh';
   return `<div class="card" style="margin-top:10px;background:var(--surface-2);border-style:dashed">
-    <div class="card-h" style="font-size:14px">➕ 建立新測驗（建好會自動選用）</div>
+    <div class="card-h" style="font-size:14px">➕ 建立新測驗（${foreign?`${langOf(Sa.draftLang).flag} ${langName(Sa.draftLang)}·外籍`:'台籍／一般'}，建好會自動選用）</div>
     <label class="fld" style="margin-top:4px">測驗名稱</label>
     <input id="niq_title" placeholder="例如：跌倒預防">
     <label class="fld">說明（選填）</label>
     <input id="niq_desc" placeholder="例如：全體員工共同必考">
-    <label class="fld">開放對象（可複選）</label>
-    <div class="chips" id="niq_roles">
-      ${ROLES.filter(r=>r.key!=='admin').map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="checkbox" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
-    </div>
+    ${foreign
+      ? `<div class="note" style="color:var(--accent-dk);margin-top:8px">🔒 自動設為 <b>${langName(Sa.draftLang)}</b>／<b>${kindOf(Sa.draftKind).name}</b>／外籍照服專屬（依這批草稿）。</div>`
+      : `<label class="fld">開放對象（可複選）</label>
+         <div class="chips" id="niq_roles">
+           ${ROLES.filter(r=>r.key!=='admin' && !r.foreign).map(r=>`<label class="chip-ck" data-role="${r.key}"><input type="checkbox" value="${r.key}">${r.emoji} ${r.name}</label>`).join('')}
+         </div>`}
     <button class="btn block" style="margin-top:12px" onclick="createQuizInline()">✓ 建立並選用</button>
   </div>`;
 }
@@ -417,11 +478,18 @@ function toggleNewQuiz(){ Sa.newQuizOpen=!Sa.newQuizOpen; render(); }
 async function createQuizInline(){
   const title=document.getElementById('niq_title').value.trim();
   if(!title){ toast('請輸入測驗名稱'); return; }
-  const roles=[...document.querySelectorAll('#niq_roles input:checked')].map(c=>c.value);
-  if(!roles.length){ toast('請至少選一個開放對象'); return; }
+  const descr=document.getElementById('niq_desc').value.trim();
+  const foreign = Sa.draftLang!=='zh';
   toast('建立中…');
   try{
-    const q=await DB.addQuiz({ title, descr:document.getElementById('niq_desc').value.trim(), emoji:'📘', roles });
+    let q;
+    if(foreign){
+      q=await DB.addQuiz({ title, descr, emoji:kindOf(Sa.draftKind).emoji, roles:['foreign_care'], audience:'foreign', lang:Sa.draftLang, kind:Sa.draftKind });
+    } else {
+      const roles=[...document.querySelectorAll('#niq_roles input:checked')].map(c=>c.value);
+      if(!roles.length){ toast('請至少選一個開放對象'); return; }
+      q=await DB.addQuiz({ title, descr, emoji:'📘', roles, audience:'local', lang:'zh', kind:'skill' });
+    }
     if(q && q.id) Sa.draftQuiz=q.id;      // 自動選用新測驗
     Sa.newQuizOpen=false;
     render(); toast('已建立並選用：'+title);
@@ -456,27 +524,27 @@ async function genDraftExplain(i){
   const stem=(d.stem||'').trim(), correct=(d.correct||'').trim();
   if(!stem||!correct){ toast('請先填題幹與正解'); return; }
   toast('🤖 生成教學解說中…');
-  try{ Sa.drafts[i].explain=await aiExplain(stem, correct, d.distractors); render(); toast('已生成教學解說，可再修改'); }
+  try{ Sa.drafts[i].explain=await aiExplain(stem, correct, d.distractors, {lang:Sa.draftLang}); render(); toast('已生成教學解說，可再修改'); }
   catch(e){ toast('❌ '+e.message.slice(0,100)); }
 }
 function _draftValid(d){ const ds=(d.distractors||[]).map(x=>(x||'').trim()).filter(Boolean); return d.stem.trim()&&d.correct.trim()&&ds.length>=3; }
 async function addDraft(i){
-  const d=Sa.drafts[i], quiz_id=Sa.draftQuiz||(DB.quizzes()[0]&&DB.quizzes()[0].id);
-  if(!quiz_id){ toast('請先建立測驗'); return; }
+  const d=Sa.drafts[i], quiz_id=Sa.draftQuiz||firstCompatibleQuiz(Sa.draftLang);
+  if(!quiz_id){ toast('請先建立對應語言的測驗'); return; }
   if(!_draftValid(d)){ toast('題幹、正解與 3 個干擾項為必填'); return; }
   try{
-    await DB.addQuestion({ quiz_id, stem:d.stem.trim(), correct:d.correct.trim(),
+    await DB.addQuestion({ quiz_id, lang:Sa.draftLang, stem:d.stem.trim(), correct:d.correct.trim(),
       distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim(), quiz_note:'', flash_answer:(d.flash_answer||'').trim() });
     Sa.drafts.splice(i,1); toast('已加入題庫'); render();
   }catch(e){ toast('加入失敗：'+e.message); }
 }
 async function addAllDrafts(){
-  const quiz_id=Sa.draftQuiz||(DB.quizzes()[0]&&DB.quizzes()[0].id);
-  if(!quiz_id){ toast('請先建立測驗'); return; }
+  const quiz_id=Sa.draftQuiz||firstCompatibleQuiz(Sa.draftLang);
+  if(!quiz_id){ toast('請先建立對應語言的測驗'); return; }
   let added=0; const keep=[];
   for(const d of Sa.drafts){
     if(_draftValid(d)){
-      try{ await DB.addQuestion({ quiz_id, stem:d.stem.trim(), correct:d.correct.trim(),
+      try{ await DB.addQuestion({ quiz_id, lang:Sa.draftLang, stem:d.stem.trim(), correct:d.correct.trim(),
         distractors:d.distractors.map(x=>x.trim()).filter(Boolean), explain:(d.explain||'').trim(), quiz_note:'', flash_answer:(d.flash_answer||'').trim() }); added++; }
       catch(e){ keep.push(d); }
     } else keep.push(d);
