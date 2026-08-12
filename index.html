@@ -58,7 +58,7 @@ function renderLogin(errMsg){
     <div class="card">
       <div class="card-h">🔑 員工登入</div>
       <label class="fld">員工編號</label>
-      <input id="lg_id" placeholder="例如 H1974" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()">
+      <input id="lg_id" placeholder="例如 H1974 或 T0001" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()">
       <label class="fld">密碼</label>
       <input id="lg_pw" type="password" placeholder="輸入密碼" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
       ${errMsg?`<div class="fb b" style="margin-top:12px">❌ ${esc(errMsg)}</div>`:''}

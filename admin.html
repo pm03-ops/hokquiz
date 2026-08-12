@@ -302,7 +302,7 @@ async function delQ(id){ if(!confirm('確定刪除此題？'))return; try{ await
 function viewUsers(){
   const list=Sa.profiles||[];
   return `
-  <div class="admin-hint">💡 在這裡建立員工帳號。員工用<b>員工編號（H+4碼）+ 密碼</b>登入；預設密碼由你設定，員工<b>首次登入會被要求改成自己的密碼</b>。忘記密碼時由你在此重設。</div>
+  <div class="admin-hint">💡 在這裡建立員工帳號。員工用<b>員工編號（H台籍／T外籍 + 4碼）+ 密碼</b>登入；預設密碼由你設定，員工<b>首次登入會被要求改成自己的密碼</b>。忘記密碼時由你在此重設。</div>
   <div class="cols2">
     <div class="card">
       <div class="card-h">👤 新增帳號</div>
