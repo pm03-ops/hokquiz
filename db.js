@@ -268,6 +268,28 @@ const DB = {
     if(error) throw error;
   },
 
+  /* ---------- 語言學習：單字卡（vocab_cards / vocab_progress） ---------- */
+  async loadVocab(lang){
+    let q=sb.from('vocab_cards').select('*').order('theme').order('level').order('created_at');
+    if(lang) q=q.eq('lang', lang);
+    const { data, error }=await q; if(error) throw error; this.cache.vocab=data||[]; return this.cache.vocab;
+  },
+  vocab(){ return this.cache.vocab||[]; },
+  async addVocabCard(c){ const { data, error }=await sb.from('vocab_cards').insert(c).select().single(); if(error) throw error; (this.cache.vocab=this.cache.vocab||[]).push(data); return data; },
+  async addVocabCards(cards){ const { data, error }=await sb.from('vocab_cards').insert(cards).select(); if(error) throw error; this.cache.vocab=(this.cache.vocab||[]).concat(data||[]); return data||[]; },
+  async updateVocabCard(id, patch){ const { data, error }=await sb.from('vocab_cards').update(patch).eq('id', id).select().single(); if(error) throw error; const i=(this.cache.vocab||[]).findIndex(x=>x.id===id); if(i>=0)this.cache.vocab[i]=data; return data; },
+  async delVocabCard(id){ const { error }=await sb.from('vocab_cards').delete().eq('id', id); if(error) throw error; this.cache.vocab=(this.cache.vocab||[]).filter(x=>x.id!==id); },
+  /* 熟悉度 */
+  async loadVocabProgress(){ const { data, error }=await sb.from('vocab_progress').select('*').eq('user_id', this.me().id); if(error) throw error; this.cache.vocabProgress=data||[]; return data; },
+  vocabProgress(){ return this.cache.vocabProgress||[]; },
+  isFamiliar(cardId){ const p=(this.cache.vocabProgress||[]).find(x=>x.card_id===cardId); return !!(p && p.familiar); },
+  async setVocabFamiliar(cardId, familiar){
+    const { error }=await sb.from('vocab_progress').upsert({ user_id:this.me().id, card_id:cardId, familiar, updated_at:new Date().toISOString() }, { onConflict:'user_id,card_id' });
+    if(error) throw error;
+    const p=(this.cache.vocabProgress=this.cache.vocabProgress||[]); const ex=p.find(x=>x.card_id===cardId);
+    if(ex) ex.familiar=familiar; else p.push({ user_id:this.me().id, card_id:cardId, familiar });
+  },
+
   /* ---------- 合併單位群組（後台 / 報表用） ---------- */
   async loadUnitMerges(){
     const { data, error } = await sb.from('unit_merges').select('*').order('created_at');
@@ -319,6 +341,9 @@ async function aiDistractors(stem, correct, opts){ return (await aiInvoke('distr
 async function aiExplain(stem, correct, distractors, opts){ return (await aiInvoke('explain', {stem, correct, distractors, ...(opts||{})})).explain; }
 async function aiFlashAnswer(stem, correct, opts){ return (await aiInvoke('flash', {stem, correct, ...(opts||{})})).flashAnswer; }
 async function aiQuestionsFromText(text, n, opts){ return (await aiInvoke('questions', {text, n, ...(opts||{})})).questions; }
+/* 語言學習單字卡：貼中文補完一張 / 匯入教材拆多張 */
+async function aiVocabEnrich(zh, lang){ return (await aiInvoke('vocab_enrich', {zh, lang})).card; }
+async function aiVocabSplit(text, lang, n){ return (await aiInvoke('vocab_split', {text, lang, n})).cards; }
 
 /* =====================================================================
    檔案內容擷取 —— .txt/.md/.csv/.tsv、Word(.docx)、Excel(.xlsx)
