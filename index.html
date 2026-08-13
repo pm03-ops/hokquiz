@@ -23,7 +23,7 @@
    資料來自 Supabase（db.js / Auth）。
    ===================================================================== */
 
-const S = { view:'home', play:null, flash:null, study:null, mode:null };
+const S = { view:'home', play:null, flash:null, study:null, mode:null, vunit:null, vidx:0, vflip:false };
 const root=()=>document.getElementById('root');
 const me =()=>DB.me();
 
@@ -206,6 +206,8 @@ function render(){
   const u=me();
   // 外籍員工：登入後先選「語言學習／技術學習」才進入
   if(u && isForeignRole(u.role) && !S.mode){ renderForeignChooser(); return; }
+  // 語言學習（學中文）→ 走單字卡學習流程
+  if(u && isForeignRole(u.role) && S.mode==='language'){ S.vunit? renderVocabStudy() : renderVocabUnits(); return; }
   ({home:renderHome, learn:renderLearn, quizzes:renderQuizList,
     review:renderReview, leaderboard:renderLeaderboard }[S.view]||renderHome)();
 }
@@ -226,7 +228,89 @@ function renderForeignChooser(){
     <div class="note center" style="margin-top:16px"><button class="btn ghost" onclick="Auth.logout().then(()=>renderLogin())">⏻ 登出</button></div>
   </div></div>`;
 }
-function setMode(m){ S.mode=m; S.view='home'; window.scrollTo(0,0); render(); }
+async function setMode(m){
+  S.mode=m; S.view='home'; S.vunit=null; window.scrollTo(0,0);
+  if(m==='language'){ try{ await DB.loadVocab(me().lang); await DB.loadVocabProgress(); }catch(e){ toast('載入失敗：'+e.message); } }
+  render();
+}
+
+/* =====================================================================
+   學中文：單字卡學習（依主題＋級別分小單元）
+   ===================================================================== */
+function jsq(s){ return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'').replace(/\n/g,' '); }
+function speak(text){
+  try{
+    if(!('speechSynthesis' in window)){ toast('此裝置不支援朗讀'); return; }
+    speechSynthesis.cancel();
+    const u=new SpeechSynthesisUtterance(String(text)); u.lang='zh-TW'; u.rate=0.9; speechSynthesis.speak(u);
+  }catch(e){}
+}
+function vocabShell(inner){
+  return `<div class="shell">
+    <div class="topbar">
+      <div class="brand"><span class="mark">✚</span>照護<b>學堂</b></div>
+      <div class="grow"></div>
+      <button class="btn sec sm" onclick="switchMode()">🔄 切換</button>
+      <button class="iconbtn" title="登出" onclick="Auth.logout().then(()=>renderLogin())">⏻</button>
+    </div>
+    <div class="content">${inner}</div>
+  </div>`;
+}
+function switchMode(){ S.mode=null; S.vunit=null; render(); }
+function vocabUnitsData(){
+  const units={};
+  DB.vocab().forEach(c=>{ const th=c.theme||'其他', lv=c.level||'basic', k=th+'|'+lv;
+    (units[k]=units[k]||{theme:th,level:lv,list:[]}).list.push(c); });
+  return Object.values(units).sort((a,b)=> a.theme.localeCompare(b.theme) || (a.level>b.level?1:-1));
+}
+function renderVocabUnits(){
+  const u=me(), l=langOf(u.lang), units=vocabUnitsData();
+  root().innerHTML=vocabShell(`
+    <div class="greet">🈶 學中文 <span class="sub">${l.flag} ${l.name} · 嗨，${esc(u.name)}</span></div>
+    ${units.length? `<div class="sect">選一個單元開始</div><div class="card">
+      ${units.map(un=>{ const fam=un.list.filter(c=>DB.isFamiliar(c.id)).length;
+        return `<div class="row-item">
+          <div class="thumb">${un.level==='advanced'?'🌶️':'🌱'}</div>
+          <div class="row-body"><div class="t">${esc(un.theme)} <span class="tag ${un.level==='advanced'?'amber':'teal'}">${un.level==='advanced'?'進階':'基礎'}</span></div>
+            <div class="s">${un.list.length} 張 · 已熟悉 ${fam}/${un.list.length}</div></div>
+          <button class="btn sm" onclick="openVocabUnit('${jsq(un.theme)}','${un.level}')">學習</button>
+        </div>`; }).join('')}
+    </div>` : '<div class="card"><div class="empty"><span class="e">📭</span>老師還沒建立單字卡，請稍後再來。</div></div>'}`);
+}
+function openVocabUnit(theme, level){ S.vunit={theme,level}; S.vidx=0; S.vflip=false; window.scrollTo(0,0); render(); }
+function vocabUnitCards(){ const {theme,level}=S.vunit; return DB.vocab().filter(c=>(c.theme||'其他')===theme && (c.level||'basic')===level); }
+function renderVocabStudy(){
+  const cards=vocabUnitCards();
+  if(!cards.length){ S.vunit=null; render(); return; }
+  const i=Math.min(S.vidx, cards.length-1), c=cards[i], fam=DB.isFamiliar(c.id);
+  const exBlock=(icon,role,zh,py,nat)=> zh? `<div class="fb g" style="text-align:left;margin-top:10px">
+      <div><b>${icon} ${role}：</b>${esc(zh)} <button class="btn ghost sm" onclick="event.stopPropagation();speak('${jsq(zh)}')">🔊</button></div>
+      <div class="muted" style="font-size:13px;margin-top:2px">${esc(py||'')}${nat?'　'+esc(nat):''}</div></div>`:'';
+  root().innerHTML=vocabShell(`
+    <div class="qhead"><span><button class="btn ghost sm" onclick="S.vunit=null;render()">← 單元</button>　${esc(S.vunit.theme)}·${S.vunit.level==='advanced'?'進階':'基礎'}</span><span>${i+1} / ${cards.length}</span></div>
+    <div class="bar"><i style="width:${(i+1)/cards.length*100}%"></i></div>
+    <div class="card" style="text-align:center;padding:28px 20px;cursor:pointer" onclick="S.vflip=!S.vflip;render()">
+      <div style="font-size:36px;font-weight:900;letter-spacing:1px">${esc(c.zh)}</div>
+      <div class="muted" style="font-size:18px;margin-top:6px">${esc(c.pinyin||'')}</div>
+      <button class="btn sec sm" style="margin-top:12px" onclick="event.stopPropagation();speak('${jsq(c.zh)}')">🔊 播放</button>
+      ${S.vflip? `<div class="divider"></div>
+        <div style="font-size:18px;font-weight:800;color:var(--brand-dk)">${esc(c.meaning||'')}</div>
+        ${exBlock('👴','長輩',c.example_zh,c.example_pinyin,c.example_native)}
+        ${exBlock('🧑‍⚕️','照顧員',c.example_staff_zh,c.example_staff_pinyin,c.example_staff_native)}`
+        : '<div class="note" style="margin-top:14px">👆 點卡片翻面看意思與對話例句</div>'}
+    </div>
+    <div class="inline" style="margin-top:14px">
+      <button class="btn ${fam?'sec':''}" style="flex:1" onclick="markVocab('${c.id}',false)">🤔 不熟</button>
+      <button class="btn ${fam?'amber':'sec'}" style="flex:1" onclick="markVocab('${c.id}',true)">✅ 熟悉</button>
+    </div>
+    <div class="inline" style="margin-top:10px">
+      <button class="btn sec" style="flex:1" onclick="vocabPrev()" ${i?'':'disabled'}>上一張</button>
+      <button class="btn" style="flex:2" onclick="vocabNext()">${i===cards.length-1?'完成單元':'下一張'} →</button>
+    </div>`);
+}
+function vocabPrev(){ if(S.vidx>0){ S.vidx--; S.vflip=false; render(); } }
+function vocabNext(){ const n=vocabUnitCards().length; if(S.vidx<n-1){ S.vidx++; S.vflip=false; render(); } else { S.vunit=null; render(); toast('單元完成！🎉'); } }
+async function markVocab(id, familiar){ try{ await DB.setVocabFamiliar(id, familiar); render(); }catch(e){ toast('儲存失敗：'+e.message); } }
 function shell(inner, tab){
   const u=me(), r=roleOf(u.role);
   const tabs=[{k:'home',e:'🏠',n:'首頁'},{k:'learn',e:'📚',n:'學習'},{k:'quizzes',e:'📝',n:'測驗'},{k:'review',e:'🔁',n:'複習'},{k:'leaderboard',e:'🏆',n:'排行'}];
