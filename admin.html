@@ -772,9 +772,14 @@ function vocabEditor(d, i){
     ${f('中文（繁體）','zh')}
     ${f('拼音（含聲調）','pinyin','dùzi tòng')}
     ${f('母語意思（'+ll.name+'）','meaning')}
+    <div class="mini" style="margin-top:10px;color:var(--muted)">👴 長輩會說的</div>
     ${f('例句（中文）','example_zh')}
     ${f('例句拼音','example_pinyin')}
     ${f('例句母語翻譯','example_native')}
+    <div class="mini" style="margin-top:10px;color:var(--muted)">🧑‍⚕️ 照顧員回應</div>
+    ${f('回應例句（中文）','example_staff_zh')}
+    ${f('回應例句拼音','example_staff_pinyin')}
+    ${f('回應例句母語翻譯','example_staff_native')}
     <div class="inline">
       <div style="flex:1;min-width:120px"><label class="fld">主題</label>
         <input list="vthemes" value="${esc(d.theme||'')}" oninput="Sa.vocabEditingList[${i}].theme=this.value" placeholder="選或自訂"></div>
@@ -791,7 +796,7 @@ function vocabRow(c){
   return `<div class="row-item">
     <div class="row-body">
       <div class="t">${esc(c.zh)} <span class="mini">${esc(c.pinyin||'')}</span></div>
-      <div class="s">${esc(c.meaning||'')}${c.example_zh?' · 例：'+esc(c.example_zh):''}</div>
+      <div class="s">${esc(c.meaning||'')}${c.example_zh?'<br>👴 '+esc(c.example_zh):''}${c.example_staff_zh?'<br>🧑‍⚕️ '+esc(c.example_staff_zh):''}</div>
       <div class="tags"><span class="tag">${esc(c.theme||'其他')}</span><span class="tag ${c.level==='advanced'?'amber':'teal'}">${c.level==='advanced'?'進階':'基礎'}</span></div>
     </div>
     <div class="rowbtns">
@@ -819,6 +824,7 @@ function vocabBlank(){
 }
 function _vocabPayload(d){ return { zh:(d.zh||'').trim(), pinyin:(d.pinyin||'').trim(), meaning:(d.meaning||'').trim(),
   example_zh:(d.example_zh||'').trim(), example_pinyin:(d.example_pinyin||'').trim(), example_native:(d.example_native||'').trim(),
+  example_staff_zh:(d.example_staff_zh||'').trim(), example_staff_pinyin:(d.example_staff_pinyin||'').trim(), example_staff_native:(d.example_staff_native||'').trim(),
   theme:(d.theme||'其他').trim(), level:(d.level==='advanced'?'advanced':'basic') }; }
 async function vocabSaveOne(i){
   const d=Sa.vocabEditingList[i]; if(!d) return;
@@ -863,7 +869,7 @@ function vocabDraftsHTML(){
     <button class="btn block" style="margin-bottom:10px" onclick="vocabAddAllDrafts()">✓ 全部加入（${Sa.vocabDrafts.length}）</button>
     ${Sa.vocabDrafts.map((d,i)=>`<div class="card draft">
       <div class="card-h" style="justify-content:space-between;font-size:14px"><span>${langOf(d.lang||Sa.vocabLang).flag} ${esc(d.zh)} <span class="mini">${esc(d.pinyin||'')}</span></span><button class="btn ghost sm" onclick="Sa.vocabDrafts.splice(${i},1);render()">捨棄</button></div>
-      <div class="s" style="color:var(--muted);font-size:13px">${esc(d.meaning||'')}${d.example_zh?'<br>例：'+esc(d.example_zh)+' ('+esc(d.example_pinyin||'')+')':''}</div>
+      <div class="s" style="color:var(--muted);font-size:13px">${esc(d.meaning||'')}${d.example_zh?'<br>👴 '+esc(d.example_zh):''}${d.example_staff_zh?'<br>🧑‍⚕️ '+esc(d.example_staff_zh):''}</div>
       <div class="tags" style="margin-top:6px"><span class="tag">${esc(d.theme||'其他')}</span><span class="tag ${d.level==='advanced'?'amber':'teal'}">${d.level==='advanced'?'進階':'基礎'}</span></div>
     </div>`).join('')}`;
 }

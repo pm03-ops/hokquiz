@@ -172,18 +172,22 @@ Deno.serve(async (req: Request) => {
       properties: {
         zh: { type: "STRING" }, pinyin: { type: "STRING" }, meaning: { type: "STRING" },
         example_zh: { type: "STRING" }, example_pinyin: { type: "STRING" }, example_native: { type: "STRING" },
+        example_staff_zh: { type: "STRING" }, example_staff_pinyin: { type: "STRING" }, example_staff_native: { type: "STRING" },
         theme: { type: "STRING" }, level: { type: "STRING" },
       },
-      required: ["zh", "pinyin", "meaning", "example_zh", "example_pinyin", "example_native", "theme", "level"],
+      required: ["zh", "pinyin", "meaning", "example_zh", "example_pinyin", "example_native", "example_staff_zh", "example_staff_pinyin", "example_staff_native", "theme", "level"],
     };
     const normalizeCard = (d: Record<string, unknown>) => ({
       zh: String(d.zh || "").trim(), pinyin: String(d.pinyin || "").trim(), meaning: String(d.meaning || "").trim(),
       example_zh: String(d.example_zh || "").trim(), example_pinyin: String(d.example_pinyin || "").trim(),
-      example_native: String(d.example_native || "").trim(), theme: String(d.theme || "").trim(),
+      example_native: String(d.example_native || "").trim(),
+      example_staff_zh: String(d.example_staff_zh || "").trim(), example_staff_pinyin: String(d.example_staff_pinyin || "").trim(),
+      example_staff_native: String(d.example_staff_native || "").trim(),
+      theme: String(d.theme || "").trim(),
       level: (String(d.level || "").toLowerCase() === "advanced" ? "advanced" : "basic"),
     });
     const cardFields = (native: string) =>
-      `每張卡欄位：\n- zh：中文（繁體；輸入有錯字請訂正）\n- pinyin：漢語拼音（含聲調符號）\n- meaning：用${native}寫的意思\n- example_zh：一句照護情境的例句（繁體中文）\n- example_pinyin：例句的漢語拼音\n- example_native：例句的${native}翻譯\n- theme：主題（從：問候、身體部位、症狀、日常照護、盥洗、餵食、飲食、安全緊急、情緒安撫、時間數字、稱呼；擇一或自訂簡短詞）\n- level：basic 或 advanced（依難度）`;
+      `每張卡欄位：\n- zh：中文（繁體；輸入有錯字請訂正）\n- pinyin：漢語拼音（含聲調符號）\n- meaning：用${native}寫的意思\n- 兩句「照護現場對話」例句（構成一問一答）：\n  · example_zh／example_pinyin／example_native：一句「👴 長輩（被照顧者）會說的話」（自然帶到此詞），中文＋拼音＋${native}翻譯\n  · example_staff_zh／example_staff_pinyin／example_staff_native：一句「🧑‍⚕️ 照顧人員回應時會說的話」（承接上句、自然對話），中文＋拼音＋${native}翻譯\n- theme：主題（從：問候、身體部位、症狀、日常照護、盥洗、餵食、飲食、安全緊急、情緒安撫、時間數字、稱呼；擇一或自訂簡短詞）\n- level：basic 或 advanced（依難度）`;
 
     // 貼中文詞/句 → 補完成一張單字卡
     if (action === "vocab_enrich") {
