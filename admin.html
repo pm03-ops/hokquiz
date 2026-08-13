@@ -29,7 +29,7 @@ const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', imp
   // AI 匯入產生的草稿批次語言（zh=一般；vi/id=外語）＋類別
   draftLang:'zh', draftKind:'skill',
   // 學中文單字卡管理
-  vocabLang:'vi', vzh:'', vocabEditing:null, vocabMaterial:'', vocabN:'auto', vocabDrafts:[] };
+  vocabLang:'vi', vzh:'', vocabEditingList:[], vocabBoth:false, vocabBusy:false, vocabMaterial:'', vocabN:'auto', vocabDrafts:[] };
 function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'', quizNote:'', flashAnswer:'' }; }
 resetK();
 const root=()=>document.getElementById('root');
@@ -727,15 +727,20 @@ function viewVocab(){
     ${LANGS.map(l=>`<button class="${L===l.key?'on':''}" style="padding:7px 13px;font-size:13px" onclick="setVocabLang('${l.key}')">${l.flag} ${l.name}</button>`).join('')}
   </div>
 
+  <datalist id="vthemes">${VTHEMES.map(t=>`<option value="${esc(t)}">`).join('')}</datalist>
   <div class="card">
-    <div class="card-h">✨ 新增一張卡（${langName(L)}）</div>
-    <div class="inline" style="align-items:flex-end">
-      <div style="flex:1;min-width:180px"><label class="fld" style="margin-top:0">中文詞／短句</label>
-        <input id="vz_zh" value="${esc(Sa.vzh||'')}" oninput="Sa.vzh=this.value" placeholder="例如：肚子痛　或　阿公，該吃藥了"></div>
-      <button class="btn amber" onclick="vocabEnrich()">🤖 AI 補完</button>
-      <button class="btn sec" onclick="vocabBlank()">✍️ 空白手動</button>
+    <div class="card-h">✨ 新增一張卡</div>
+    <label class="fld" style="margin-top:0">中文詞／短句</label>
+    <input id="vz_zh" value="${esc(Sa.vzh||'')}" oninput="Sa.vzh=this.value" placeholder="例如：肚子痛　或　阿公，該吃藥了">
+    <label class="chip-ck ${Sa.vocabBoth?'sel':''}" style="margin-top:10px" onclick="Sa.vocabBoth=!Sa.vocabBoth;render()"><input type="checkbox" ${Sa.vocabBoth?'checked':''}>🇻🇳＋🇮🇩 兩種語言一起產生</label>
+    <div class="inline" style="margin-top:10px">
+      <button class="btn amber" style="flex:1" onclick="vocabEnrich()" ${Sa.vocabBusy?'disabled':''}>${Sa.vocabBusy?'🤖 生成中…':'🤖 AI 補完'}</button>
+      <button class="btn sec" onclick="vocabBlank()" ${Sa.vocabBusy?'disabled':''}>✍️ 空白手動</button>
     </div>
-    ${Sa.vocabEditing? vocabEditor() : '<div class="note">貼中文按「AI 補完」自動補拼音／意思／例句；或「空白手動」自己填。</div>'}
+    ${Sa.vocabBusy?'<div class="card draft" style="margin-top:12px;text-align:center;color:var(--muted)">🤖 AI 生成中，請稍候…</div>':''}
+    ${(Sa.vocabEditingList&&Sa.vocabEditingList.length)
+      ? (Sa.vocabEditingList.length>1?`<button class="btn block" style="margin-top:12px" onclick="vocabSaveAll()">✓ ${Sa.vocabEditingList.length} 張全部加入</button>`:'')+Sa.vocabEditingList.map((d,i)=>vocabEditor(d,i)).join('')
+      : (Sa.vocabBusy?'':'<div class="note" style="margin-top:10px">貼中文按「AI 補完」→ 自動補拼音／意思／例句並<b>展開下方欄位</b>供你審核；或「空白手動」自己填。勾「兩種語言一起」會同時產生越南文＋印尼文兩張卡。</div>')}
   </div>
 
   <div class="card">
@@ -758,28 +763,27 @@ function viewVocab(){
       ${byTheme[th].map(vocabRow).join('')}
     </div>`).join('') : '<div class="card"><div class="empty">尚無單字卡，用上面三種方式新增。</div></div>'}`;
 }
-/* 可編輯的工作卡（新增或編輯共用；欄位綁 Sa.vocabEditing） */
-function vocabEditor(){
-  const d=Sa.vocabEditing;
-  const f=(label,key,ph)=>`<label class="fld">${label}</label><input value="${esc(d[key]||'')}" oninput="Sa.vocabEditing.${key}=this.value" placeholder="${ph||''}">`;
+/* 可編輯的工作卡（新增或編輯共用；欄位綁 Sa.vocabEditingList[i]） */
+function vocabEditor(d, i){
+  const ll=langOf(d.lang||Sa.vocabLang);
+  const f=(label,key,ph)=>`<label class="fld">${label}</label><input value="${esc(d[key]||'')}" oninput="Sa.vocabEditingList[${i}].${key}=this.value" placeholder="${ph||''}">`;
   return `<div class="card draft" style="margin-top:12px">
-    <div class="card-h" style="font-size:14px">${d.id?'✏️ 編輯卡':'📇 新卡'}</div>
+    <div class="card-h" style="font-size:14px">${d.id?'✏️ 編輯卡':'📇 新卡'}　<span class="tag amber">${ll.flag} ${ll.name}</span></div>
     ${f('中文（繁體）','zh')}
     ${f('拼音（含聲調）','pinyin','dùzi tòng')}
-    ${f('母語意思（'+langName(Sa.vocabLang)+'）','meaning')}
+    ${f('母語意思（'+ll.name+'）','meaning')}
     ${f('例句（中文）','example_zh')}
     ${f('例句拼音','example_pinyin')}
     ${f('例句母語翻譯','example_native')}
     <div class="inline">
       <div style="flex:1;min-width:120px"><label class="fld">主題</label>
-        <input list="vthemes" value="${esc(d.theme||'')}" oninput="Sa.vocabEditing.theme=this.value" placeholder="選或自訂">
-        <datalist id="vthemes">${VTHEMES.map(t=>`<option value="${t}">`).join('')}</datalist></div>
+        <input list="vthemes" value="${esc(d.theme||'')}" oninput="Sa.vocabEditingList[${i}].theme=this.value" placeholder="選或自訂"></div>
       <div style="min-width:110px"><label class="fld">級別</label>
-        <select onchange="Sa.vocabEditing.level=this.value"><option value="basic" ${d.level==='basic'?'selected':''}>基礎</option><option value="advanced" ${d.level==='advanced'?'selected':''}>進階</option></select></div>
+        <select onchange="Sa.vocabEditingList[${i}].level=this.value"><option value="basic" ${d.level==='basic'?'selected':''}>基礎</option><option value="advanced" ${d.level==='advanced'?'selected':''}>進階</option></select></div>
     </div>
     <div class="inline" style="margin-top:12px">
-      <button class="btn ghost" style="flex:1" onclick="Sa.vocabEditing=null;render()">取消</button>
-      <button class="btn" style="flex:2" onclick="vocabSave()">${d.id?'更新':'✓ 加入'}</button>
+      <button class="btn ghost" style="flex:1" onclick="vocabCancel(${i})">取消</button>
+      <button class="btn" style="flex:2" onclick="vocabSaveOne(${i})">${d.id?'更新':'✓ 加入'}</button>
     </div>
   </div>`;
 }
@@ -796,25 +800,45 @@ function vocabRow(c){
     </div>
   </div>`;
 }
-function editVocab(id){ const c=DB.vocab().find(x=>x.id===id); if(!c)return; Sa.vocabEditing={...c}; window.scrollTo(0,0); render(); }
+function editVocab(id){ const c=DB.vocab().find(x=>x.id===id); if(!c)return; Sa.vocabEditingList=[{...c}]; window.scrollTo(0,0); render(); }
+function vocabCancel(i){ Sa.vocabEditingList.splice(i,1); render(); }
 async function vocabEnrich(){
   const zh=(Sa.vzh||'').trim(); if(!zh){ toast('請先輸入中文'); return; }
-  toast('🤖 AI 補完中…');
-  try{ const card=await aiVocabEnrich(zh, Sa.vocabLang); Sa.vocabEditing=card; render(); toast('已補完，請審核'); }
-  catch(e){ toast('❌ '+e.message.slice(0,100)); }
-}
-function vocabBlank(){ Sa.vocabEditing={ zh:(Sa.vzh||'').trim(), pinyin:'', meaning:'', example_zh:'', example_pinyin:'', example_native:'', theme:'', level:'basic' }; render(); }
-async function vocabSave(){
-  const d=Sa.vocabEditing; if(!d) return;
-  if(!(d.zh||'').trim()||!(d.meaning||'').trim()){ toast('中文與母語意思為必填'); return; }
-  const payload={ zh:d.zh.trim(), pinyin:(d.pinyin||'').trim(), meaning:d.meaning.trim(),
-    example_zh:(d.example_zh||'').trim(), example_pinyin:(d.example_pinyin||'').trim(), example_native:(d.example_native||'').trim(),
-    theme:(d.theme||'其他').trim(), level:(d.level==='advanced'?'advanced':'basic') };
+  const langs = Sa.vocabBoth ? ['vi','id'] : [Sa.vocabLang];
+  Sa.vocabBusy=true; Sa.vocabEditingList=[]; render();
   try{
-    if(d.id){ await DB.updateVocabCard(d.id, payload); toast('已更新'); }
-    else { await DB.addVocabCard({ lang:Sa.vocabLang, ...payload }); toast('已加入'); }
-    Sa.vocabEditing=null; Sa.vzh=''; render();
+    const list=[];
+    for(const lg of langs){ const c=await aiVocabEnrich(zh, lg); c.lang=lg; list.push(c); }
+    Sa.vocabEditingList=list; Sa.vocabBusy=false; render(); toast('已補完 '+list.length+' 張，請審核');
+  }catch(e){ Sa.vocabBusy=false; render(); toast('❌ '+e.message.slice(0,100)); }
+}
+function vocabBlank(){
+  const langs = Sa.vocabBoth ? ['vi','id'] : [Sa.vocabLang];
+  Sa.vocabEditingList = langs.map(lg=>({ lang:lg, zh:(Sa.vzh||'').trim(), pinyin:'', meaning:'', example_zh:'', example_pinyin:'', example_native:'', theme:'', level:'basic' }));
+  render();
+}
+function _vocabPayload(d){ return { zh:(d.zh||'').trim(), pinyin:(d.pinyin||'').trim(), meaning:(d.meaning||'').trim(),
+  example_zh:(d.example_zh||'').trim(), example_pinyin:(d.example_pinyin||'').trim(), example_native:(d.example_native||'').trim(),
+  theme:(d.theme||'其他').trim(), level:(d.level==='advanced'?'advanced':'basic') }; }
+async function vocabSaveOne(i){
+  const d=Sa.vocabEditingList[i]; if(!d) return;
+  if(!(d.zh||'').trim()||!(d.meaning||'').trim()){ toast('中文與母語意思為必填'); return; }
+  try{
+    if(d.id){ await DB.updateVocabCard(d.id, _vocabPayload(d)); toast('已更新'); }
+    else { await DB.addVocabCard({ lang:d.lang||Sa.vocabLang, ..._vocabPayload(d) }); toast('已加入'); }
+    Sa.vocabEditingList.splice(i,1); if(!Sa.vocabEditingList.length) Sa.vzh=''; render();
   }catch(e){ toast('儲存失敗：'+e.message); }
+}
+async function vocabSaveAll(){
+  const list=Sa.vocabEditingList.filter(d=>(d.zh||'').trim()&&(d.meaning||'').trim());
+  if(!list.length){ toast('中文與母語意思為必填'); return; }
+  toast('加入中…');
+  try{
+    const news=list.filter(d=>!d.id).map(d=>({ lang:d.lang||Sa.vocabLang, ..._vocabPayload(d) }));
+    if(news.length) await DB.addVocabCards(news);
+    for(const d of list.filter(x=>x.id)){ await DB.updateVocabCard(d.id, _vocabPayload(d)); }
+    Sa.vocabEditingList=[]; Sa.vzh=''; toast('已加入'); render();
+  }catch(e){ toast('加入失敗：'+e.message); }
 }
 async function delVocab(id){ if(!confirm('確定刪除此單字卡？'))return; try{ await DB.delVocabCard(id); toast('已刪除'); render(); }catch(e){ toast('刪除失敗：'+e.message); } }
 async function vocabHandleFiles(input){
@@ -824,24 +848,27 @@ async function vocabHandleFiles(input){
 }
 async function vocabSplit(){
   const text=(Sa.vocabMaterial||'').trim(); if(text.length<4){ toast('請先貼上或上傳中文教材'); return; }
-  toast('🤖 AI 拆卡中…（可能需幾秒）');
-  try{ const cards=await aiVocabSplit(text, Sa.vocabLang, Sa.vocabN||'auto'); if(!cards.length){ toast('沒有拆出卡片'); return; } Sa.vocabDrafts=cards; render(); toast('已拆 '+cards.length+' 張，請審核'); }
-  catch(e){ toast('❌ '+e.message.slice(0,100)); }
+  const langs = Sa.vocabBoth ? ['vi','id'] : [Sa.vocabLang];
+  Sa.vocabBusy=true; render();
+  try{
+    let drafts=[];
+    for(const lg of langs){ const cards=await aiVocabSplit(text, lg, Sa.vocabN||'auto'); cards.forEach(c=>c.lang=lg); drafts=drafts.concat(cards); }
+    Sa.vocabBusy=false;
+    if(!drafts.length){ render(); toast('沒有拆出卡片'); return; }
+    Sa.vocabDrafts=drafts; render(); toast('已拆 '+drafts.length+' 張，請審核');
+  }catch(e){ Sa.vocabBusy=false; render(); toast('❌ '+e.message.slice(0,100)); }
 }
 function vocabDraftsHTML(){
   return `<div class="sect" style="margin-top:14px">拆出的卡（${Sa.vocabDrafts.length}）· 審核後加入</div>
     <button class="btn block" style="margin-bottom:10px" onclick="vocabAddAllDrafts()">✓ 全部加入（${Sa.vocabDrafts.length}）</button>
     ${Sa.vocabDrafts.map((d,i)=>`<div class="card draft">
-      <div class="card-h" style="justify-content:space-between;font-size:14px"><span>${esc(d.zh)} <span class="mini">${esc(d.pinyin||'')}</span></span><button class="btn ghost sm" onclick="Sa.vocabDrafts.splice(${i},1);render()">捨棄</button></div>
+      <div class="card-h" style="justify-content:space-between;font-size:14px"><span>${langOf(d.lang||Sa.vocabLang).flag} ${esc(d.zh)} <span class="mini">${esc(d.pinyin||'')}</span></span><button class="btn ghost sm" onclick="Sa.vocabDrafts.splice(${i},1);render()">捨棄</button></div>
       <div class="s" style="color:var(--muted);font-size:13px">${esc(d.meaning||'')}${d.example_zh?'<br>例：'+esc(d.example_zh)+' ('+esc(d.example_pinyin||'')+')':''}</div>
       <div class="tags" style="margin-top:6px"><span class="tag">${esc(d.theme||'其他')}</span><span class="tag ${d.level==='advanced'?'amber':'teal'}">${d.level==='advanced'?'進階':'基礎'}</span></div>
     </div>`).join('')}`;
 }
 async function vocabAddAllDrafts(){
-  const rows=Sa.vocabDrafts.filter(d=>(d.zh||'').trim()&&(d.meaning||'').trim()).map(d=>({ lang:Sa.vocabLang,
-    zh:d.zh.trim(), pinyin:(d.pinyin||'').trim(), meaning:d.meaning.trim(), example_zh:(d.example_zh||'').trim(),
-    example_pinyin:(d.example_pinyin||'').trim(), example_native:(d.example_native||'').trim(),
-    theme:(d.theme||'其他').trim(), level:(d.level==='advanced'?'advanced':'basic') }));
+  const rows=Sa.vocabDrafts.filter(d=>(d.zh||'').trim()&&(d.meaning||'').trim()).map(d=>({ lang:d.lang||Sa.vocabLang, ..._vocabPayload(d) }));
   if(!rows.length){ toast('沒有可加入的卡'); return; }
   toast('加入中…');
   try{ await DB.addVocabCards(rows); Sa.vocabDrafts=[]; toast('已加入 '+rows.length+' 張'); render(); }
