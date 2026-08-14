@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 <div id="root"><div class="shell"><div class="auth"><div class="auth-logo"><div class="mk">✚</div><div class="nm">照護<b>學堂</b></div><div class="tag2">載入中…</div></div></div></div></div>
@@ -304,8 +304,8 @@ function renderVocabStudy(){
         : '<div class="note" style="margin-top:14px">👆 點卡片翻面看意思與對話例句</div>'}
     </div>
     <div class="inline" style="margin-top:14px">
-      <button class="btn ${fam?'sec':''}" style="flex:1" onclick="markVocab('${c.id}',false)">🤔 不熟</button>
-      <button class="btn ${fam?'amber':'sec'}" style="flex:1" onclick="markVocab('${c.id}',true)">✅ 熟悉</button>
+      <button class="toggle-btn ${fam?'':'on-unfam'}" onclick="markVocab('${c.id}',false)">${fam?'':'✓ '}🤔 不熟</button>
+      <button class="toggle-btn ${fam?'on-fam':''}" onclick="markVocab('${c.id}',true)">${fam?'✓ ':''}✅ 熟悉</button>
     </div>
     <div class="inline" style="margin-top:10px">
       <button class="btn sec" style="flex:1" onclick="vocabPrev()" ${i?'':'disabled'}>上一張</button>
@@ -389,7 +389,7 @@ function pronScore(target, heard){
 function startVocabSpeak(theme, level){
   const pool=DB.vocab().filter(c=>(c.theme||'其他')===theme && (c.level||'basic')===level);
   if(!pool.length){ toast('此單元沒有卡'); return; }
-  S.vspeak={ list:pool, idx:0, theme, level, phase:'idle', heard:'', result:null };
+  S.vspeak={ list:pool, idx:0, theme, level, phase:'idle', heard:'', result:null, myAudioUrl:null };
   window.scrollTo(0,0); render();
 }
 function renderVocabSpeak(){
@@ -407,6 +407,10 @@ function renderVocabSpeak(){
       <div class="muted" style="font-size:18px;margin-top:6px">${esc(c.pinyin||'')}</div>
       <button class="btn sec sm" style="margin-top:12px" onclick="speak('${jsq(c.zh)}')">🔊 先聽正確發音</button>
       <div style="margin-top:16px">${btn}</div>
+      ${V.myAudioUrl? `<div class="inline" style="margin-top:12px;justify-content:center;gap:8px">
+        <button class="btn sec sm" onclick="speak('${jsq(c.zh)}')">🔊 正確發音</button>
+        <button class="btn sec sm" onclick="playMyRec()">▶️ 我的錄音</button>
+      </div><div class="note center" style="margin-top:6px">兩個都按，比比看你唸的和正確發音差在哪</div>`:''}
       ${V.result? speakFeedback(V) : '<div class="note" style="margin-top:12px">先按 🔊 聽發音，再按「開始錄音」唸出上面的中文，然後按停止，系統會判斷你唸得標不標準。</div>'}
     </div>
     <div class="inline" style="margin-top:12px">
@@ -425,13 +429,16 @@ function speakFeedback(V){
 function speakNav(d){
   const V=S.vspeak, n=V.idx+d;
   if(n<0) return;
+  if(V.myAudioUrl){ try{ URL.revokeObjectURL(V.myAudioUrl); }catch(_){} V.myAudioUrl=null; }
   if(n>=V.list.length){ S.vspeak=null; render(); toast('口說練習完成！🎉'); return; }
   V.idx=n; V.result=null; V.heard=''; V.phase='idle'; render();
 }
+function playMyRec(){ const u=S.vspeak&&S.vspeak.myAudioUrl; if(!u){ toast('還沒有錄音'); return; } try{ new Audio(u).play(); }catch(e){} }
 async function speakStart(){
   const V=S.vspeak;
   if(!navigator.mediaDevices || !window.MediaRecorder){ toast('此裝置／瀏覽器不支援錄音'); return; }
   try{
+    if(V.myAudioUrl){ try{ URL.revokeObjectURL(V.myAudioUrl); }catch(_){} V.myAudioUrl=null; }
     const stream=await navigator.mediaDevices.getUserMedia({ audio:true });
     _recChunks=[]; _rec=new MediaRecorder(stream);
     _rec.ondataavailable=e=>{ if(e.data && e.data.size) _recChunks.push(e.data); };
@@ -443,6 +450,8 @@ async function speakStop(){
   const V=S.vspeak;
   try{
     const blob=await _stopRec();
+    if(V.myAudioUrl){ try{ URL.revokeObjectURL(V.myAudioUrl); }catch(_){} }
+    V.myAudioUrl=URL.createObjectURL(blob);
     V.phase='working'; render();
     if(!_asr) toast('首次載入語音模型，約需下載幾十 MB，請稍候…');
     const { read_audio }=await tfLib();

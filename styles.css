@@ -278,3 +278,8 @@ table.rep td.name{font-weight:700}
 .qopts .qo.ok{background:var(--good-soft);color:#0a7d43}
 .qo-learn{padding:11px 13px;border-radius:11px;background:var(--surface-2);border:1.5px solid var(--line);margin-bottom:7px;font-weight:600;font-size:15px}
 .qo-learn.ok{background:var(--good-soft);border-color:#bfe6cd;color:#0a7d43;font-weight:800}
+/* 熟悉/不熟 切換按鈕 */
+.toggle-btn{flex:1;border:2px solid var(--line-2);background:var(--surface);color:var(--muted);font-weight:800;font-size:15px;padding:13px;border-radius:14px;box-shadow:none;transition:.15s;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.toggle-btn:hover{border-color:var(--muted)}
+.toggle-btn.on-fam{border-color:var(--good);background:var(--good);color:#fff;box-shadow:0 6px 16px rgba(18,164,90,.32);transform:translateY(-1px)}
+.toggle-btn.on-unfam{border-color:var(--accent);background:var(--accent);color:#3a2600;box-shadow:0 6px 16px rgba(245,158,11,.32);transform:translateY(-1px)}
