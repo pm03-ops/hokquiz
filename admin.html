@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=8">
+<link rel="stylesheet" href="styles.css?v=9">
 </head>
 <body>
 <div id="root"><div class="shell wide"><div class="content"><div class="note center" style="padding:60px">載入中…</div></div></div></div>
@@ -29,7 +29,7 @@ const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', imp
   // AI 匯入產生的草稿批次語言（zh=一般；vi/id=外語）＋類別
   draftLang:'zh', draftKind:'skill',
   // 學中文單字卡管理
-  vocabLang:'vi', vzh:'', vocabEditingList:[], vocabBoth:false, vocabBusy:false, vocabMaterial:'', vocabN:'auto', vocabDrafts:[] };
+  vocabLang:'vi', vzh:'', vocabEditingList:[], vocabBoth:false, vocabBusy:false, vocabMaterial:'', vocabN:'auto', vocabDrafts:[], vocabBatch:null };
 function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'', quizNote:'', flashAnswer:'' }; }
 resetK();
 const root=()=>document.getElementById('root');
@@ -756,6 +756,17 @@ function viewVocab(){
     ${(Sa.vocabDrafts&&Sa.vocabDrafts.length)? vocabDraftsHTML() : ''}
   </div>
 
+  ${(()=>{ const miss=cards.filter(c=>!(c.meaning||'').trim()).length, b=Sa.vocabBatch;
+    if(!miss && !(b&&b.running)) return '';
+    return `<div class="card">
+    <div class="card-h">🤖 批次 AI 補完（${langName(L)}）</div>
+    <div class="note" style="margin:0 0 8px">替<b>還沒有母語意思</b>的卡自動補：拼音／意思／👴長輩例句＋🧑‍⚕️照顧者回話。可隨時停止，之後再按會接著補（不重覆已完成的）。</div>
+    ${(b&&b.running)
+      ? `<div class="fb" style="margin-bottom:8px">⏳ 補完中 ${b.done}/${b.total}…${b.fail?`（失敗 ${b.fail}）`:''}</div><button class="btn sec block" onclick="if(Sa.vocabBatch)Sa.vocabBatch.stop=true">■ 停止</button>`
+      : `<button class="btn amber block" onclick="vocabEnrichMissing()">🤖 補完這 ${miss} 張缺意思的卡</button>
+         <div class="mini" style="margin-top:6px;text-align:center">免費額度有速率限制，會慢慢補（每張約幾秒），可留著頁面讓它跑。</div>`}
+    </div>`; })()}
+
   <div class="sect">現有單字卡（${langName(L)} · ${cards.length}）</div>
   ${cards.length? Object.keys(byTheme).map(th=>`
     <div class="card">
@@ -826,6 +837,39 @@ function _vocabPayload(d){ return { zh:(d.zh||'').trim(), pinyin:(d.pinyin||'').
   example_zh:(d.example_zh||'').trim(), example_pinyin:(d.example_pinyin||'').trim(), example_native:(d.example_native||'').trim(),
   example_staff_zh:(d.example_staff_zh||'').trim(), example_staff_pinyin:(d.example_staff_pinyin||'').trim(), example_staff_native:(d.example_staff_native||'').trim(),
   theme:(d.theme||'其他').trim(), level:(d.level==='advanced'?'advanced':'basic') }; }
+/* 批次補完：把目前語言中「缺母語意思」的卡逐一送 AI 補完（可停止、可續補、不重覆） */
+async function vocabEnrichMissing(){
+  const L=Sa.vocabLang;
+  const targets=DB.vocab().filter(c=>c.lang===L && !(c.meaning||'').trim());
+  if(!targets.length){ toast('沒有需要補完的卡'); return; }
+  Sa.vocabBatch={ running:true, done:0, total:targets.length, fail:0, stop:false };
+  render();
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+  for(const c of targets){
+    if(Sa.vocabBatch.stop) break;
+    let ok=false;
+    for(let tryn=0; tryn<3 && !ok && !Sa.vocabBatch.stop; tryn++){
+      try{
+        const ai=await aiVocabEnrich(c.zh, c.lang);
+        const merged={ ...ai, zh:c.zh, theme:c.theme||ai.theme, level:c.level||ai.level };
+        if(!(merged.meaning||'').trim()) throw new Error('empty');
+        await DB.updateVocabCard(c.id, _vocabPayload(merged));
+        ok=true;
+      }catch(e){
+        const m=String(e&&e.message||e);
+        if(/429|rate|quota|limit|exhaust/i.test(m)) await sleep(9000);
+        else if(tryn<2) await sleep(2000);
+      }
+    }
+    Sa.vocabBatch.done++; if(!ok) Sa.vocabBatch.fail++;
+    render();
+    if(!Sa.vocabBatch.stop) await sleep(1500);   // 尊重免費額度速率
+  }
+  const b=Sa.vocabBatch, stopped=b.stop, done=b.done, fail=b.fail;
+  Sa.vocabBatch=null; render();
+  toast(stopped ? `已停止（成功 ${done-fail} 張，可稍後再按繼續）`
+                : `✅ 補完結束（成功 ${done-fail}／${done}${fail?`，失敗 ${fail}`:''}）`);
+}
 async function vocabSaveOne(i){
   const d=Sa.vocabEditingList[i]; if(!d) return;
   if(!(d.zh||'').trim()||!(d.meaning||'').trim()){ toast('中文與母語意思為必填'); return; }
