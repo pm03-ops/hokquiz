@@ -715,7 +715,8 @@ async function testAi(btn){
 /* =====================================================================
    學中文：單字卡管理
    ===================================================================== */
-const VTHEMES=['問候','身體部位','症狀','日常照護','盥洗','餵食','飲食','安全緊急','情緒安撫','時間數字','稱呼'];
+/* 固定主題分類（與種子一致）：分類鎖成清單，避免同義/錯字造成分類飄移 */
+const VTHEMES=['問候','稱呼','身體部位','症狀','日常照護','盥洗','餵食','安全緊急','情緒安撫','時間數字','環境物品'];
 function setVocabLang(l){ Sa.vocabLang=l; Sa.vocabEditing=null; Sa.vocabDrafts=[]; render(); }
 function viewVocab(){
   const L=Sa.vocabLang, cards=DB.vocab().filter(c=>c.lang===L);
@@ -756,6 +757,19 @@ function viewVocab(){
     ${(Sa.vocabDrafts&&Sa.vocabDrafts.length)? vocabDraftsHTML() : ''}
   </div>
 
+  ${(()=>{ const r=vocabSyncReport(); if(!r.total) return '';
+    const issues=r.missing.length+r.mismatch.length;
+    return `<div class="card">
+    <div class="card-h">🔁 雙語同步檢查（🇻🇳 越南 ↔ 🇮🇩 印尼）</div>
+    ${issues===0
+      ? `<div class="empty">✅ 已完全同步：${r.pairs} 個中文詞都成對、分類/拼音一致。</div>`
+      : `<div class="note" style="margin:0 0 10px">共 ${r.total} 個中文詞、成對 ${r.pairs} 個，發現 <b>${issues}</b> 個要處理：</div>
+         ${r.missing.length? `<div class="fb b" style="margin-bottom:8px">🈳 缺對應語言 ${r.missing.length} 個<div class="mini" style="margin-top:4px">${r.missing.slice(0,10).map(m=>`${esc(m.zh)}<span style="opacity:.6">→缺${langOf(m.missLang).flag}</span>`).join('、')}${r.missing.length>10?' …':''}</div></div>
+            <button class="btn amber block" style="margin-bottom:10px" onclick="vocabFixMissing()">🔧 補建缺少的 ${r.missing.length} 張（複製共用欄位、意思留空待 AI 補）</button>`:''}
+         ${r.mismatch.length? `<div class="fb b" style="margin-bottom:8px">⚠️ 分類/拼音不一致 ${r.mismatch.length} 個<div class="mini" style="margin-top:4px">${r.mismatch.slice(0,10).map(m=>esc(m.zh)).join('、')}${r.mismatch.length>10?' …':''}</div></div>
+            <button class="btn sec block" onclick="vocabAlignShared()">↔️ 一鍵對齊共用欄位（拼音／主題／級別／中文例句）</button>`:''}`}
+    </div>`; })()}
+
   ${(()=>{ const miss=cards.filter(c=>!(c.meaning||'').trim()).length, b=Sa.vocabBatch;
     if(!miss && !(b&&b.running)) return '';
     return `<div class="card">
@@ -793,7 +807,7 @@ function vocabEditor(d, i){
     ${f('回應例句母語翻譯','example_staff_native')}
     <div class="inline">
       <div style="flex:1;min-width:120px"><label class="fld">主題</label>
-        <input list="vthemes" value="${esc(d.theme||'')}" oninput="Sa.vocabEditingList[${i}].theme=this.value" placeholder="選或自訂"></div>
+        <select onchange="Sa.vocabEditingList[${i}].theme=this.value"><option value="">— 選主題 —</option>${VTHEMES.map(t=>`<option value="${esc(t)}" ${d.theme===t?'selected':''}>${esc(t)}</option>`).join('')}${d.theme&&!VTHEMES.includes(d.theme)?`<option value="${esc(d.theme)}" selected>${esc(d.theme)}（舊）</option>`:''}</select></div>
       <div style="min-width:110px"><label class="fld">級別</label>
         <select onchange="Sa.vocabEditingList[${i}].level=this.value"><option value="basic" ${d.level==='basic'?'selected':''}>基礎</option><option value="advanced" ${d.level==='advanced'?'selected':''}>進階</option></select></div>
     </div>
@@ -869,6 +883,49 @@ async function vocabEnrichMissing(){
   Sa.vocabBatch=null; render();
   toast(stopped ? `已停止（成功 ${done-fail} 張，可稍後再按繼續）`
                 : `✅ 補完結束（成功 ${done-fail}／${done}${fail?`，失敗 ${fail}`:''}）`);
+}
+/* ---------- 雙語同步：以中文(zh)為概念鍵，檢查兩語言是否成對、共用欄位是否一致 ---------- */
+const VSHARED=['pinyin','theme','level'];
+function vocabSyncReport(){
+  const all=DB.vocab(), langs=LANGS.map(l=>l.key), byZh={};
+  all.forEach(c=>{ (byZh[c.zh]=byZh[c.zh]||{})[c.lang]=c; });
+  const zhs=Object.keys(byZh), missing=[], mismatch=[]; let pairs=0;
+  zhs.forEach(zh=>{
+    const m=byZh[zh], present=langs.filter(k=>m[k]);
+    if(present.length<langs.length){
+      langs.filter(k=>!m[k]).forEach(missLang=>missing.push({ zh, missLang, src:m[present[0]] }));
+    } else {
+      pairs++;
+      if(VSHARED.some(f=>String(m[langs[0]][f]||'').trim()!==String(m[langs[1]][f]||'').trim()))
+        mismatch.push({ zh, cards:langs.map(k=>m[k]) });
+    }
+  });
+  return { total:zhs.length, pairs, missing, mismatch };
+}
+async function vocabFixMissing(){
+  const r=vocabSyncReport(); if(!r.missing.length){ toast('沒有要補建的'); return; }
+  if(!confirm(`將補建 ${r.missing.length} 張缺少語言的卡（複製中文/拼音/主題/級別與中文例句，母語意思留空，之後用「批次 AI 補完」補齊）。繼續？`)) return;
+  const rows=r.missing.map(m=>({ lang:m.missLang, zh:m.zh, pinyin:m.src.pinyin||'', meaning:'',
+    example_zh:m.src.example_zh||'', example_pinyin:m.src.example_pinyin||'', example_native:'',
+    example_staff_zh:m.src.example_staff_zh||'', example_staff_pinyin:m.src.example_staff_pinyin||'', example_staff_native:'',
+    theme:m.src.theme||'其他', level:m.src.level||'basic' }));
+  try{ await DB.addVocabCards(rows); toast(`已補建 ${rows.length} 張，記得到該語言按「批次 AI 補完」補意思`); render(); }
+  catch(e){ toast('補建失敗：'+e.message); }
+}
+async function vocabAlignShared(){
+  const r=vocabSyncReport(); if(!r.mismatch.length){ toast('沒有不一致的'); return; }
+  if(!confirm(`將把 ${r.mismatch.length} 個字的共用欄位（拼音/主題/級別/中文例句）以「意思較完整那張」為準對齊到另一語言。母語意思不受影響。繼續？`)) return;
+  let n=0;
+  try{
+    for(const mm of r.mismatch){
+      const [a,b]=mm.cards, src=(a.meaning||'').trim().length>=(b.meaning||'').trim().length? a:b, dst=(src===a?b:a);
+      await DB.updateVocabCard(dst.id, { pinyin:src.pinyin||'', theme:src.theme||'其他', level:src.level||'basic',
+        example_zh:src.example_zh||'', example_pinyin:src.example_pinyin||'',
+        example_staff_zh:src.example_staff_zh||'', example_staff_pinyin:src.example_staff_pinyin||'' });
+      n++;
+    }
+    toast(`已對齊 ${n} 個字`); render();
+  }catch(e){ toast('對齊失敗：'+e.message); render(); }
 }
 async function vocabSaveOne(i){
   const d=Sa.vocabEditingList[i]; if(!d) return;

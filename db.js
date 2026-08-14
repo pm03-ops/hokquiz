@@ -289,6 +289,28 @@ const DB = {
     const p=(this.cache.vocabProgress=this.cache.vocabProgress||[]); const ex=p.find(x=>x.card_id===cardId);
     if(ex) ex.familiar=familiar; else p.push({ user_id:this.me().id, card_id:cardId, familiar });
   },
+  /* ---------- 字卡 SRS 間隔複習（沿用 FLASH_INTERVALS） ---------- */
+  vocabProgOf(cardId){ return (this.cache.vocabProgress||[]).find(x=>x.card_id===cardId)||null; },
+  /** 評分一張單字卡：known=true「熟悉」→ 間隔變長；false「不熟」→ 今天再現 */
+  async rateVocab(cardId, known){
+    const uid=this.me().id, today=todayNum();
+    const p=(this.cache.vocabProgress=this.cache.vocabProgress||[]);
+    const r=p.find(x=>x.card_id===cardId)||{level:0, reps:0};
+    let level, reps;
+    if(known){ level=Math.min((r.level||0)+1, FLASH_INTERVALS.length-1); reps=(r.reps||0)+1; }
+    else { level=Math.max(0,(r.level||0)-1); reps=0; }
+    const due = known ? today+FLASH_INTERVALS[level] : today;
+    const row={ user_id:uid, card_id:cardId, familiar:known, level, due, reps, updated_at:new Date().toISOString() };
+    const { error }=await sb.from('vocab_progress').upsert(row, { onConflict:'user_id,card_id' });
+    if(error) throw error;
+    const ex=p.find(x=>x.card_id===cardId);
+    if(ex) Object.assign(ex,{familiar:known,level,due,reps}); else p.push(row);
+    return { level, due, reps, known };
+  },
+  /** 今天到期需複習的卡（已學過、due<=今天） */
+  vocabDueList(lang){ const t=todayNum(); return this.vocab().filter(c=>{ if(lang&&c.lang!==lang) return false; const pr=this.vocabProgOf(c.id); return pr && (pr.due||0)<=t; }); },
+  /** 還沒學過的新卡（無進度紀錄） */
+  vocabNewList(lang){ return this.vocab().filter(c=>{ if(lang&&c.lang!==lang) return false; return !this.vocabProgOf(c.id); }); },
 
   /* ---------- 合併單位群組（後台 / 報表用） ---------- */
   async loadUnitMerges(){
