@@ -23,7 +23,7 @@
    資料來自 Supabase（db.js / Auth）。
    ===================================================================== */
 
-const S = { view:'home', play:null, flash:null, study:null, mode:null, vunit:null, vidx:0, vflip:false };
+const S = { view:'home', play:null, flash:null, study:null, mode:null, vunit:null, vidx:0, vflip:false, vprac:null };
 const root=()=>document.getElementById('root');
 const me =()=>DB.me();
 
@@ -207,7 +207,7 @@ function render(){
   // 外籍員工：登入後先選「語言學習／技術學習」才進入
   if(u && isForeignRole(u.role) && !S.mode){ renderForeignChooser(); return; }
   // 語言學習（學中文）→ 走單字卡學習流程
-  if(u && isForeignRole(u.role) && S.mode==='language'){ S.vunit? renderVocabStudy() : renderVocabUnits(); return; }
+  if(u && isForeignRole(u.role) && S.mode==='language'){ S.vprac? renderVocabPractice() : (S.vunit? renderVocabStudy() : renderVocabUnits()); return; }
   ({home:renderHome, learn:renderLearn, quizzes:renderQuizList,
     review:renderReview, leaderboard:renderLeaderboard }[S.view]||renderHome)();
 }
@@ -273,7 +273,10 @@ function renderVocabUnits(){
           <div class="thumb">${un.level==='advanced'?'🌶️':'🌱'}</div>
           <div class="row-body"><div class="t">${esc(un.theme)} <span class="tag ${un.level==='advanced'?'amber':'teal'}">${un.level==='advanced'?'進階':'基礎'}</span></div>
             <div class="s">${un.list.length} 張 · 已熟悉 ${fam}/${un.list.length}</div></div>
-          <button class="btn sm" onclick="openVocabUnit('${jsq(un.theme)}','${un.level}')">學習</button>
+          <div class="rowbtns">
+            <button class="btn sec sm" onclick="openVocabUnit('${jsq(un.theme)}','${un.level}')">字卡</button>
+            <button class="btn sm" onclick="startVocabPractice('${jsq(un.theme)}','${un.level}')">練習</button>
+          </div>
         </div>`; }).join('')}
     </div>` : '<div class="card"><div class="empty"><span class="e">📭</span>老師還沒建立單字卡，請稍後再來。</div></div>'}`);
 }
@@ -311,6 +314,63 @@ function renderVocabStudy(){
 function vocabPrev(){ if(S.vidx>0){ S.vidx--; S.vflip=false; render(); } }
 function vocabNext(){ const n=vocabUnitCards().length; if(S.vidx<n-1){ S.vidx++; S.vflip=false; render(); } else { S.vunit=null; render(); toast('單元完成！🎉'); } }
 async function markVocab(id, familiar){ try{ await DB.setVocabFamiliar(id, familiar); render(); }catch(e){ toast('儲存失敗：'+e.message); } }
+
+/* ---------- 學中文練習（由單字卡自動生成：看/情境/聽） ---------- */
+function startVocabPractice(theme, level){
+  const pool=DB.vocab().filter(c=>(c.theme||'其他')===theme && (c.level||'basic')===level);
+  if(!pool.length){ toast('此單元沒有卡'); return; }
+  const distr = DB.vocab().length>=4 ? DB.vocab() : pool;
+  const types=['meaning','produce','listen'];
+  const list=shuffle(pool).map(card=>{
+    const type=types[Math.floor(Math.random()*types.length)];
+    const others=shuffle(distr.filter(c=>c.id!==card.id)).slice(0,3);
+    const opts=shuffle([card,...others]).map(c=>({ text: type==='produce'? c.zh : (c.meaning||c.zh), correct:c.id===card.id }));
+    return { card, type, options:opts, theme, level };
+  });
+  S.vprac={ list, idx:0, correct:0, answered:false };
+  window.scrollTo(0,0); render();
+}
+function renderVocabPractice(){
+  const P=S.vprac, q=P.list[P.idx], keys=['A','B','C','D'];
+  const prompt = q.type==='produce'
+    ? `<div class="muted" style="font-size:12px;margin-top:6px">選出正確的中文說法</div><div class="stem">${esc(q.card.meaning||'')}</div>`
+    : q.type==='listen'
+      ? `<div class="muted" style="font-size:12px;margin-top:6px">🎧 聽中文，選出意思</div><div style="text-align:center;margin:16px 0"><button class="btn" onclick="speak('${jsq(q.card.zh)}')">🔊 再播一次</button></div>`
+      : `<div class="muted" style="font-size:12px;margin-top:6px">這個中文是什麼意思？</div><div class="stem">${esc(q.card.zh)} <span class="muted" style="font-size:16px">${esc(q.card.pinyin||'')}</span></div>`;
+  root().innerHTML=vocabShell(`
+    <div class="qhead"><span><button class="btn ghost sm" onclick="S.vprac=null;render()">← 結束</button>　🈶 練習</span><span>${P.idx+1} / ${P.list.length}</span></div>
+    <div class="bar"><i style="width:${P.idx/P.list.length*100}%"></i></div>
+    ${prompt}
+    <div id="opts">${q.options.map((o,i)=>`<button class="opt" onclick="answerVocab(${i})"><span class="key">${keys[i]}</span><span>${esc(o.text)}</span></button>`).join('')}</div>
+    <div id="fb"></div>`);
+  if(q.type==='listen'){ setTimeout(()=>speak(q.card.zh), 350); }
+}
+function answerVocab(i){
+  const P=S.vprac; if(P.answered) return; P.answered=true;
+  const q=P.list[P.idx], correct=!!q.options[i].correct, c=q.card;
+  document.querySelectorAll('#opts .opt').forEach((b,idx)=>{ b.disabled=true; if(q.options[idx].correct)b.classList.add('correct'); else if(idx===i)b.classList.add('wrong'); });
+  if(correct) P.correct++;
+  document.getElementById('fb').innerHTML=`<div class="fb ${correct?'g':'b'}">
+    <div class="h">${correct?'✅ 正確':'❌ 再記一下'}</div>
+    <b>${esc(c.zh)}</b> ${esc(c.pinyin||'')} ＝ ${esc(c.meaning||'')} <button class="btn ghost sm" onclick="speak('${jsq(c.zh)}')">🔊</button>
+    ${c.example_zh?'<br>👴 '+esc(c.example_zh):''}${c.example_staff_zh?'<br>🧑‍⚕️ '+esc(c.example_staff_zh):''}
+  </div>
+  <button class="btn block" style="margin-top:12px" onclick="nextVocabPrac()">${P.idx===P.list.length-1?'看結果':'下一題'} →</button>`;
+  document.getElementById('fb').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function nextVocabPrac(){ const P=S.vprac; if(P.idx<P.list.length-1){ P.idx++; P.answered=false; render(); } else finishVocabPrac(); }
+function finishVocabPrac(){
+  const P=S.vprac, pct=Math.round(P.correct/P.list.length*100), th=P.list[0].theme, lv=P.list[0].level;
+  root().innerHTML=vocabShell(`<div class="card center" style="padding:34px 22px">
+    <div class="big-emoji">${pct===100?'🏆':pct>=60?'😄':'💪'}</div>
+    <h3 style="font-size:22px;font-weight:900;margin:12px 0 2px">${P.correct}/${P.list.length} 答對（${pct}%）</h3>
+    <div class="muted" style="font-size:13px">${esc(th)}·${lv==='advanced'?'進階':'基礎'}</div>
+    <div class="inline" style="margin-top:22px">
+      <button class="btn sec" style="flex:1" onclick="S.vprac=null;render()">回單元</button>
+      <button class="btn" style="flex:1" onclick="startVocabPractice('${jsq(th)}','${lv}')">再一次</button>
+    </div>
+  </div>`);
+}
 function shell(inner, tab){
   const u=me(), r=roleOf(u.role);
   const tabs=[{k:'home',e:'🏠',n:'首頁'},{k:'learn',e:'📚',n:'學習'},{k:'quizzes',e:'📝',n:'測驗'},{k:'review',e:'🔁',n:'複習'},{k:'leaderboard',e:'🏆',n:'排行'}];
