@@ -23,7 +23,7 @@
    資料來自 Supabase（db.js / Auth）。
    ===================================================================== */
 
-const S = { view:'home', play:null, flash:null, study:null, mode:null, vunit:null, vidx:0, vflip:false, vprac:null };
+const S = { view:'home', play:null, flash:null, study:null, mode:null, vunit:null, vidx:0, vflip:false, vprac:null, vspeak:null };
 const root=()=>document.getElementById('root');
 const me =()=>DB.me();
 
@@ -207,7 +207,7 @@ function render(){
   // 外籍員工：登入後先選「語言學習／技術學習」才進入
   if(u && isForeignRole(u.role) && !S.mode){ renderForeignChooser(); return; }
   // 語言學習（學中文）→ 走單字卡學習流程
-  if(u && isForeignRole(u.role) && S.mode==='language'){ S.vprac? renderVocabPractice() : (S.vunit? renderVocabStudy() : renderVocabUnits()); return; }
+  if(u && isForeignRole(u.role) && S.mode==='language'){ S.vspeak? renderVocabSpeak() : (S.vprac? renderVocabPractice() : (S.vunit? renderVocabStudy() : renderVocabUnits())); return; }
   ({home:renderHome, learn:renderLearn, quizzes:renderQuizList,
     review:renderReview, leaderboard:renderLeaderboard }[S.view]||renderHome)();
 }
@@ -273,9 +273,10 @@ function renderVocabUnits(){
           <div class="thumb">${un.level==='advanced'?'🌶️':'🌱'}</div>
           <div class="row-body"><div class="t">${esc(un.theme)} <span class="tag ${un.level==='advanced'?'amber':'teal'}">${un.level==='advanced'?'進階':'基礎'}</span></div>
             <div class="s">${un.list.length} 張 · 已熟悉 ${fam}/${un.list.length}</div></div>
-          <div class="rowbtns">
+          <div class="rowbtns" style="flex-wrap:wrap;justify-content:flex-end">
             <button class="btn sec sm" onclick="openVocabUnit('${jsq(un.theme)}','${un.level}')">字卡</button>
-            <button class="btn sm" onclick="startVocabPractice('${jsq(un.theme)}','${un.level}')">練習</button>
+            <button class="btn sec sm" onclick="startVocabPractice('${jsq(un.theme)}','${un.level}')">練習</button>
+            <button class="btn sm" onclick="startVocabSpeak('${jsq(un.theme)}','${un.level}')">🎤 口說</button>
           </div>
         </div>`; }).join('')}
     </div>` : '<div class="card"><div class="empty"><span class="e">📭</span>老師還沒建立單字卡，請稍後再來。</div></div>'}`);
@@ -370,6 +371,89 @@ function finishVocabPrac(){
       <button class="btn" style="flex:1" onclick="startVocabPractice('${jsq(th)}','${lv}')">再一次</button>
     </div>
   </div>`);
+}
+
+/* ---------- 學中文 · 口說跟讀（瀏覽器內 Whisper，免金鑰） ---------- */
+let _rec=null, _recChunks=[], _asr=null, _tf=null;
+async function tfLib(){ if(!_tf){ _tf=await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2'); _tf.env.allowLocalModels=false; } return _tf; }
+async function getASR(){ if(_asr) return _asr; const { pipeline }=await tfLib(); _asr=await pipeline('automatic-speech-recognition','Xenova/whisper-tiny'); return _asr; }
+function zhOnly(s){ return String(s||'').replace(/[^一-鿿]/g,''); }
+function pronScore(target, heard){
+  const t=zhOnly(target), h=zhOnly(heard);
+  if(!h) return { ok:false, level:'none' };
+  if(h===t) return { ok:true, level:'perfect' };
+  if(h.includes(t)||t.includes(h)) return { ok:true, level:'close' };
+  const set=new Set(t.split('')); let hit=0; for(const ch of h) if(set.has(ch)) hit++;
+  return (hit/Math.max(t.length,1))>=0.5 ? { ok:true, level:'close' } : { ok:false, level:'off' };
+}
+function startVocabSpeak(theme, level){
+  const pool=DB.vocab().filter(c=>(c.theme||'其他')===theme && (c.level||'basic')===level);
+  if(!pool.length){ toast('此單元沒有卡'); return; }
+  S.vspeak={ list:pool, idx:0, theme, level, phase:'idle', heard:'', result:null };
+  window.scrollTo(0,0); render();
+}
+function renderVocabSpeak(){
+  const V=S.vspeak, c=V.list[V.idx];
+  const btn = V.phase==='recording'
+    ? `<button class="btn block" style="background:var(--bad);box-shadow:none" onclick="speakStop()">⏹️ 停止並評測</button>`
+    : V.phase==='working'
+      ? `<button class="btn block" disabled>⏳ 辨識中…（首次會下載語音模型）</button>`
+      : `<button class="btn block" onclick="speakStart()">🎤 開始錄音</button>`;
+  root().innerHTML=vocabShell(`
+    <div class="qhead"><span><button class="btn ghost sm" onclick="S.vspeak=null;render()">← 結束</button>　🎤 口說跟讀</span><span>${V.idx+1} / ${V.list.length}</span></div>
+    <div class="bar"><i style="width:${(V.idx+1)/V.list.length*100}%"></i></div>
+    <div class="card" style="text-align:center;padding:26px 20px">
+      <div style="font-size:34px;font-weight:900">${esc(c.zh)}</div>
+      <div class="muted" style="font-size:18px;margin-top:6px">${esc(c.pinyin||'')}</div>
+      <button class="btn sec sm" style="margin-top:12px" onclick="speak('${jsq(c.zh)}')">🔊 先聽正確發音</button>
+      <div style="margin-top:16px">${btn}</div>
+      ${V.result? speakFeedback(V) : '<div class="note" style="margin-top:12px">先按 🔊 聽發音，再按「開始錄音」唸出上面的中文，然後按停止，系統會判斷你唸得標不標準。</div>'}
+    </div>
+    <div class="inline" style="margin-top:12px">
+      <button class="btn sec" style="flex:1" onclick="speakNav(-1)" ${V.idx?'':'disabled'}>上一個</button>
+      <button class="btn" style="flex:2" onclick="speakNav(1)">${V.idx===V.list.length-1?'完成':'下一個'} →</button>
+    </div>`);
+}
+function speakFeedback(V){
+  const r=V.result;
+  const head = r.level==='perfect'?'✅ 發音很標準！' : r.level==='close'?'🔶 很接近，再清楚一點就更好' : (r.level==='none'?'🎙️ 沒聽清楚，再試一次':'❌ 再試一次');
+  return `<div class="fb ${r.ok?'g':'b'}" style="text-align:left;margin-top:14px">
+    <div class="h">${head}</div>
+    ${V.heard? '我聽到你唸：<b>'+esc(V.heard)+'</b>' : ''}
+  </div>`;
+}
+function speakNav(d){
+  const V=S.vspeak, n=V.idx+d;
+  if(n<0) return;
+  if(n>=V.list.length){ S.vspeak=null; render(); toast('口說練習完成！🎉'); return; }
+  V.idx=n; V.result=null; V.heard=''; V.phase='idle'; render();
+}
+async function speakStart(){
+  const V=S.vspeak;
+  if(!navigator.mediaDevices || !window.MediaRecorder){ toast('此裝置／瀏覽器不支援錄音'); return; }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({ audio:true });
+    _recChunks=[]; _rec=new MediaRecorder(stream);
+    _rec.ondataavailable=e=>{ if(e.data && e.data.size) _recChunks.push(e.data); };
+    _rec.start(); V.phase='recording'; V.result=null; V.heard=''; render();
+  }catch(e){ toast('無法取得麥克風權限，請允許後再試'); }
+}
+function _stopRec(){ return new Promise(res=>{ _rec.onstop=()=>{ const blob=new Blob(_recChunks,{type:_rec.mimeType||'audio/webm'}); try{ _rec.stream.getTracks().forEach(t=>t.stop()); }catch(_){} res(blob); }; _rec.stop(); }); }
+async function speakStop(){
+  const V=S.vspeak;
+  try{
+    const blob=await _stopRec();
+    V.phase='working'; render();
+    if(!_asr) toast('首次載入語音模型，約需下載幾十 MB，請稍候…');
+    const { read_audio }=await tfLib();
+    const url=URL.createObjectURL(blob);
+    const audio=await read_audio(url, 16000);
+    URL.revokeObjectURL(url);
+    const asr=await getASR();
+    const out=await asr(audio, { language:'chinese', task:'transcribe' });
+    const heard=((out&&out.text)||'').trim();
+    V.heard=heard; V.result=pronScore(V.list[V.idx].zh, heard); V.phase='idle'; render();
+  }catch(e){ V.phase='idle'; render(); toast('辨識失敗：'+String(e&&e.message||e).slice(0,90)); }
 }
 function shell(inner, tab){
   const u=me(), r=roleOf(u.role);
