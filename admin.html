@@ -450,7 +450,8 @@ function batchModalHTML(){
       <div class="chips">${roleChips}</div>
       <div class="inline" style="gap:8px;margin:14px 0 4px;align-items:center;flex-wrap:wrap">
         <label class="btn sec sm" style="margin:0;cursor:pointer">📄 匯入 Excel/CSV<input type="file" accept=".xlsx,.csv,.tsv,.txt" style="display:none" onchange="batchImportFile(this)"></label>
-        <button class="btn ghost sm" onclick="batchTemplate()">⬇️ 下載範本</button>
+        <button class="btn ghost sm" onclick="batchTemplateXlsx()">⬇️ Excel 範本</button>
+        <button class="btn ghost sm" onclick="batchTemplate()">⬇️ CSV 範本</button>
         <span class="mini" style="color:var(--muted)">欄位：員工編號 · 單位 · 語言（外籍才需要）</span>
       </div>
       <div class="inline" style="gap:8px;margin-top:8px;font-size:12px;color:var(--muted)"><span style="flex:1.1">員工編號（H台籍／T外籍＋4碼）</span><span style="flex:1">單位</span>${foreign?'<span style="flex:1">語言</span>':''}</div>
@@ -493,6 +494,15 @@ function batchTemplate(){
   const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='帳號匯入範本.csv';
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+}
+function batchTemplateXlsx(){
+  const data=[['員工編號','單位(代碼或名稱,可留空)','語言(越南/印尼,外籍才需要)'],
+    ['T0001','C1','越南'],['T0002','C2','印尼'],['H0001','C1','']];
+  try{
+    const blob=buildXlsx(data,'帳號');
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='帳號匯入範本.xlsx';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1500);
+  }catch(e){ toast('產生 Excel 失敗，請改用 CSV 範本'); }
 }
 async function batchCreate(){
   const b=Sa.batch; if(!b) return;

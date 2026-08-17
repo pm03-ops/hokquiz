@@ -503,3 +503,41 @@ async function parseTabularRows(file){
   const delim = ext==='tsv' ? '\t' : (text.indexOf('\t')>=0 && text.indexOf(',')<0 ? '\t' : ',');
   return text.split(/\r?\n/).filter(l=>l.trim()!=='').map(l=>_parseCSVLine(l, delim));
 }
+
+/* ---- 產生最簡 .xlsx（未壓縮 stored zip + inlineStr），供「下載 Excel 範本」用 ---- */
+function _crc32(bytes){ let c=~0; for(let i=0;i<bytes.length;i++){ c^=bytes[i]; for(let k=0;k<8;k++) c=(c>>>1)^(0xEDB88320 & -(c&1)); } return (~c)>>>0; }
+function _zu8(str){ return new TextEncoder().encode(str); }
+function _zcat(arrs){ let len=0; arrs.forEach(a=>len+=a.length); const out=new Uint8Array(len); let o=0; arrs.forEach(a=>{ out.set(a,o); o+=a.length; }); return out; }
+function _zipStore(files){
+  const le16=n=>new Uint8Array([n&255,(n>>8)&255]);
+  const le32=n=>new Uint8Array([n&255,(n>>8)&255,(n>>16)&255,(n>>>24)&255]);
+  const parts=[], central=[]; let offset=0;
+  for(const f of files){
+    const nameB=_zu8(f.name), data=f.data, crc=_crc32(data);
+    const local=_zcat([le32(0x04034b50),le16(20),le16(0),le16(0),le16(0),le16(0),le32(crc),le32(data.length),le32(data.length),le16(nameB.length),le16(0),nameB,data]);
+    central.push(_zcat([le32(0x02014b50),le16(20),le16(20),le16(0),le16(0),le16(0),le16(0),le32(crc),le32(data.length),le32(data.length),le16(nameB.length),le16(0),le16(0),le16(0),le16(0),le32(0),le32(offset),nameB]));
+    parts.push(local); offset+=local.length;
+  }
+  const cdStart=offset; let cdLen=0;
+  for(const c of central){ parts.push(c); cdLen+=c.length; }
+  parts.push(_zcat([le32(0x06054b50),le16(0),le16(0),le16(central.length),le16(central.length),le32(cdLen),le32(cdStart),le16(0)]));
+  return new Blob(parts,{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+}
+function _xmlEsc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function buildXlsx(rows, sheetName){
+  sheetName=sheetName||'Sheet1';
+  const colName=i=>{ let s=''; i++; while(i>0){ const m=(i-1)%26; s=String.fromCharCode(65+m)+s; i=Math.floor((i-1)/26); } return s; };
+  const rowsXml=rows.map((r,ri)=>`<row r="${ri+1}">${r.map((v,ci)=>`<c r="${colName(ci)}${ri+1}" t="inlineStr"><is><t xml:space="preserve">${_xmlEsc(v)}</t></is></c>`).join('')}</row>`).join('');
+  const sheet=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowsXml}</sheetData></worksheet>`;
+  const contentTypes=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`;
+  const rels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+  const workbook=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${_xmlEsc(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+  const wbRels=`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`;
+  return _zipStore([
+    {name:'[Content_Types].xml', data:_zu8(contentTypes)},
+    {name:'_rels/.rels', data:_zu8(rels)},
+    {name:'xl/workbook.xml', data:_zu8(workbook)},
+    {name:'xl/_rels/workbook.xml.rels', data:_zu8(wbRels)},
+    {name:'xl/worksheets/sheet1.xml', data:_zu8(sheet)},
+  ]);
+}
