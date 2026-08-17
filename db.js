@@ -456,3 +456,50 @@ async function extractTextFromFile(file){
   if(ext==='doc'||ext==='xls') throw new Error('舊版 .doc/.xls 不支援，請另存為 .docx/.xlsx');
   return await file.text();
 }
+
+/* ---- 結構化表格讀取（保留欄位位置，供帳號匯入用）：回傳 [[cell,cell,...], ...] ---- */
+function _colToIdx(ref){ const m=(ref||'').match(/^([A-Z]+)/); if(!m) return 0; let n=0; for(const ch of m[1]) n=n*26+(ch.charCodeAt(0)-64); return n-1; }
+async function _extractXlsxRows(file){
+  const zip=await _unzip(file);
+  const ssXml=await _readEntry(zip,'xl/sharedStrings.xml')||'';
+  const shared=[];
+  ssXml.replace(/<si>([\s\S]*?)<\/si>/g,(_,si)=>{ let t=''; si.replace(/<t[^>]*>([\s\S]*?)<\/t>/g,(_,x)=>{t+=x;return'';}); shared.push(decodeXml(t)); return ''; });
+  const sheetName=Object.keys(zip.entries).find(k=>/^xl\/worksheets\/.*\.xml$/i.test(k));
+  const sheetXml = sheetName? await _readEntry(zip,sheetName):null;
+  if(!sheetXml) throw new Error('Excel 工作表讀取失敗');
+  const rows=[];
+  sheetXml.replace(/<row[^>]*>([\s\S]*?)<\/row>/g,(_,row)=>{
+    const cells=[];
+    row.replace(/<c\b([^>]*)>([\s\S]*?)<\/c>/g,(_,attrs,cell)=>{
+      const ref=(attrs.match(/r="([A-Z]+\d+)"/)||[])[1];
+      const idx=_colToIdx(ref);
+      const type=(attrs.match(/t="([^"]+)"/)||[])[1];
+      const vm=cell.match(/<v>([\s\S]*?)<\/v>/), tm=cell.match(/<t[^>]*>([\s\S]*?)<\/t>/);
+      let v='';
+      if(type==='s' && vm) v=shared[+vm[1]]||'';
+      else if(tm) v=decodeXml(tm[1]);
+      else if(vm) v=decodeXml(vm[1]);
+      cells[idx]=(v||'').trim();
+      return '';
+    });
+    for(let i=0;i<cells.length;i++) if(cells[i]===undefined) cells[i]='';
+    rows.push(cells);
+    return '';
+  });
+  return rows;
+}
+function _parseCSVLine(line, delim){
+  const out=[]; let cur='', q=false;
+  for(let i=0;i<line.length;i++){ const ch=line[i];
+    if(q){ if(ch==='"'){ if(line[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=ch; }
+    else { if(ch==='"') q=true; else if(ch===delim){ out.push(cur); cur=''; } else cur+=ch; } }
+  out.push(cur); return out.map(s=>s.trim());
+}
+async function parseTabularRows(file){
+  const ext=(file.name.split('.').pop()||'').toLowerCase();
+  if(ext==='xlsx') return await _extractXlsxRows(file);
+  if(['doc','docx','xls','pdf'].includes(ext)) throw new Error('請用 .xlsx 或 .csv 匯入帳號');
+  const text=(await file.text()).replace(/^﻿/,'');   // 去除 UTF-8 BOM，避免第一格前多一個看不見的字元
+  const delim = ext==='tsv' ? '\t' : (text.indexOf('\t')>=0 && text.indexOf(',')<0 ? '\t' : ',');
+  return text.split(/\r?\n/).filter(l=>l.trim()!=='').map(l=>_parseCSVLine(l, delim));
+}

@@ -413,46 +413,86 @@ async function deleteStaff(userId, name){
    批次建立帳號（單獨設定畫面：共用角色 + 預設密碼 abcd1234；每列只填編號+單位）
    ===================================================================== */
 const BATCH_PW='abcd1234';
-function openBatch(){ Sa.batch={ role:'', lang:'vi', rows:[{id:'',unit:''}] }; window.scrollTo(0,0); render(); }
+function openBatch(){ Sa.batch={ role:'', rows:[{id:'',unit:'',lang:'vi'}] }; window.scrollTo(0,0); render(); }
 function closeBatch(){ Sa.batch=null; render(); }
-function batchSetRole(role){ Sa.batch.role=role; if(role==='foreign_care' && !Sa.batch.lang) Sa.batch.lang='vi'; render(); }
+function batchSetRole(role){ Sa.batch.role=role; if(role==='foreign_care') Sa.batch.rows.forEach(r=>{ if(!r.lang) r.lang='vi'; }); render(); }
 function batchRowHTML(i){
-  const r=(Sa.batch.rows[i])||{id:'',unit:''};
+  const r=(Sa.batch.rows[i])||{id:'',unit:'',lang:'vi'};
+  const foreign=Sa.batch.role==='foreign_care';
   const units=['C','D','E'].map(z=>`<optgroup label="區 ${z}">${UNITS.filter(u=>u.zone===z).map(u=>`<option value="${u.code}" ${r.unit===u.code?'selected':''}>${esc(u.name)}（${u.code}）</option>`).join('')}</optgroup>`).join('');
+  const langSel=foreign?`<select style="flex:1" onchange="batchInput(${i},'lang',this.value)">${LANGS.map(l=>`<option value="${l.key}" ${(r.lang||'vi')===l.key?'selected':''}>${l.flag} ${l.name}</option>`).join('')}</select>`:'';
   return `<div class="inline" data-idx="${i}" style="gap:8px;margin-bottom:6px">
-    <input style="flex:1" maxlength="5" placeholder="H0002 / T0002" value="${esc(r.id)}" oninput="this.value=this.value.toUpperCase();batchInput(${i},'id',this.value)">
+    <input style="flex:1.1" maxlength="5" placeholder="H0002 / T0002" value="${esc(r.id)}" oninput="this.value=this.value.toUpperCase();batchInput(${i},'id',this.value)">
     <select style="flex:1" onchange="batchInput(${i},'unit',this.value)"><option value="">— 單位（可留空）—</option>${units}</select>
+    ${langSel}
   </div>`;
 }
 function batchInput(i, field, val){
   const b=Sa.batch; if(!b) return;
-  (b.rows[i]=b.rows[i]||{id:'',unit:''})[field]=val;
+  (b.rows[i]=b.rows[i]||{id:'',unit:'',lang:'vi'})[field]=val;
   // 最後一列有資料 → 自動長出新的空白列（用 DOM 附加，避免整頁重繪造成輸入失焦）
   const last=b.rows.length-1;
   if(i===last && ((b.rows[i].id||'').trim() || (b.rows[i].unit||'').trim())){
-    b.rows.push({id:'',unit:''});
+    b.rows.push({id:'',unit:'',lang:'vi'});
     const box=document.getElementById('batch_rows');
     if(box) box.insertAdjacentHTML('beforeend', batchRowHTML(b.rows.length-1));
   }
 }
 function batchModalHTML(){
   const b=Sa.batch; if(!b) return '';
+  const foreign=b.role==='foreign_care';
   const roleChips=ROLES.map(r=>`<label class="chip-ck ${b.role===r.key?'sel':''}" onclick="batchSetRole('${r.key}')"><input type="radio" name="brole" ${b.role===r.key?'checked':''}>${r.emoji} ${r.name}</label>`).join('');
   return `<div style="position:fixed;inset:0;background:rgba(15,23,32,.55);display:flex;align-items:flex-start;justify-content:center;padding:24px 14px;z-index:1000;overflow:auto" onclick="if(event.target===this)closeBatch()">
-    <div class="card" style="max-width:560px;width:100%;margin:0;max-height:calc(100vh - 48px);overflow:auto">
+    <div class="card" style="max-width:620px;width:100%;margin:0;max-height:calc(100vh - 48px);overflow:auto">
       <div class="card-h" style="justify-content:space-between">📋 批次建立帳號 <button class="btn ghost sm" onclick="closeBatch()">✕</button></div>
-      <div class="note" style="margin:0 0 12px">選好角色後，每列只填<b>員工編號＋單位</b>（姓名預設為員工編號，日後可再改）。全部共用預設密碼 <b>${BATCH_PW}</b>，員工首次登入須改密碼。<b>填了資料就自動長出新的一列</b>，空白列不會建立。</div>
+      <div class="note" style="margin:0 0 12px">選好角色後，每列填<b>員工編號＋單位${foreign?'＋語言':''}</b>（姓名預設為員工編號，日後可再改）。${foreign?'外籍<b>每列各自選語言</b>，越南／印尼可混在同一批。':''}全部共用預設密碼 <b>${BATCH_PW}</b>，員工首次登入須改密碼。<b>填了資料就自動長出新的一列</b>，空白列不會建立。</div>
       <label class="fld" style="margin-top:0">角色（本批共用）</label>
       <div class="chips">${roleChips}</div>
-      ${b.role==='foreign_care'?`<label class="fld">語言（本批共用）</label>
-        <select onchange="Sa.batch.lang=this.value">${LANGS.map(l=>`<option value="${l.key}" ${b.lang===l.key?'selected':''}>${l.flag} ${l.name}</option>`).join('')}</select>`:''}
-      <div class="inline" style="gap:8px;margin-top:14px;font-size:12px;color:var(--muted)"><span style="flex:1">員工編號（H台籍／T外籍＋4碼）</span><span style="flex:1">單位</span></div>
+      <div class="inline" style="gap:8px;margin:14px 0 4px;align-items:center;flex-wrap:wrap">
+        <label class="btn sec sm" style="margin:0;cursor:pointer">📄 匯入 Excel/CSV<input type="file" accept=".xlsx,.csv,.tsv,.txt" style="display:none" onchange="batchImportFile(this)"></label>
+        <button class="btn ghost sm" onclick="batchTemplate()">⬇️ 下載範本</button>
+        <span class="mini" style="color:var(--muted)">欄位：員工編號 · 單位 · 語言（外籍才需要）</span>
+      </div>
+      <div class="inline" style="gap:8px;margin-top:8px;font-size:12px;color:var(--muted)"><span style="flex:1.1">員工編號（H台籍／T外籍＋4碼）</span><span style="flex:1">單位</span>${foreign?'<span style="flex:1">語言</span>':''}</div>
       <div id="batch_rows">${b.rows.map((r,i)=>batchRowHTML(i)).join('')}</div>
       <div class="inline" style="margin-top:16px">
         <button class="btn ghost" style="flex:1" onclick="closeBatch()">取消</button>
         <button class="btn" style="flex:2" id="batch_btn" onclick="batchCreate()">建立本批帳號</button>
       </div>
     </div></div>`;
+}
+/* 匯入 Excel/CSV → 帶入下面欄位（欄位順序：員工編號、單位、語言） */
+function _batchUnitCode(v){ v=(v||'').trim(); if(!v) return '';
+  const byCode=UNITS.find(u=>u.code.toUpperCase()===v.toUpperCase()); if(byCode) return byCode.code;
+  const byName=UNITS.find(u=>u.name===v || `${u.name}（${u.code}）`===v); if(byName) return byName.code;
+  const inc=UNITS.find(u=>v.toUpperCase().includes(u.code.toUpperCase())); return inc?inc.code:''; }
+function _batchLang(v){ v=(v||'').trim().toLowerCase(); if(/印尼|indo|^id$/.test(v)) return 'id'; if(/越南|viet|^vi$/.test(v)) return 'vi'; return 'vi'; }
+async function batchImportFile(input){
+  const f=input.files&&input.files[0]; if(!f){ return; }
+  try{
+    const rows=await parseTabularRows(f);
+    if(!rows.length){ toast('檔案沒有資料'); input.value=''; return; }
+    let start=0; const first=(rows[0][0]||'').trim().toUpperCase();
+    if(!/^[HT]\d{4}$/.test(first)) start=1;  // 第一列不是編號 → 當標題略過
+    const imported=[];
+    for(let i=start;i<rows.length;i++){
+      const c=rows[i]||[]; const id=(c[0]||'').trim().toUpperCase(); if(!id) continue;
+      imported.push({ id, unit:_batchUnitCode(c[1]), lang:_batchLang(c[2]) });
+    }
+    if(!imported.length){ toast('沒有讀到有效的員工編號（第一欄需為 H/T+4碼）'); input.value=''; return; }
+    const kept=Sa.batch.rows.filter(r=>(r.id||'').trim());
+    Sa.batch.rows=kept.concat(imported); Sa.batch.rows.push({id:'',unit:'',lang:'vi'});
+    input.value=''; render();
+    toast(`已匯入 ${imported.length} 筆，請核對後按建立`);
+  }catch(e){ input.value=''; toast('匯入失敗：'+(e.message||e)); }
+}
+function batchTemplate(){
+  const data=[['員工編號','單位(代碼或名稱,可留空)','語言(越南/印尼,外籍才需要)'],
+    ['T0001','C1','越南'],['T0002','C2','印尼'],['H0001','C1','']];
+  const csv='﻿'+data.map(r=>r.map(c=>/[",\n]/.test(c)?`"${c.replace(/"/g,'""')}"`:c).join(',')).join('\r\n');
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='帳號匯入範本.csv';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1500);
 }
 async function batchCreate(){
   const b=Sa.batch; if(!b) return;
@@ -476,7 +516,7 @@ async function batchCreate(){
     try{
       const res=await adminUsers('create', { employeeId:id, name:id, role:b.role, password:BATCH_PW });
       if(res && res.id && (r.unit||'').trim()){ try{ await DB.setUserUnit(res.id, r.unit); }catch(_){} }
-      if(res && res.id && b.role==='foreign_care'){ try{ await DB.setUserLang(res.id, b.lang||'vi'); }catch(_){} }
+      if(res && res.id && b.role==='foreign_care'){ try{ await DB.setUserLang(res.id, r.lang||'vi'); }catch(_){} }
       ok++;
     }catch(e){ fail.push(`${id}：${(e.message||'').slice(0,40)}`); }
   }
