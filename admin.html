@@ -29,7 +29,9 @@ const Sa = { tab:'quizzes', editQuiz:null, k:null, profiles:[], material:'', imp
   // AI 匯入產生的草稿批次語言（zh=一般；vi/id=外語）＋類別
   draftLang:'zh', draftKind:'skill',
   // 學中文單字卡管理
-  vocabLang:'vi', vzh:'', vocabEditingList:[], vocabBoth:false, vocabBusy:false, vocabMaterial:'', vocabN:'auto', vocabDrafts:[], vocabBatch:null };
+  vocabLang:'vi', vzh:'', vocabEditingList:[], vocabBoth:false, vocabBusy:false, vocabMaterial:'', vocabN:'auto', vocabDrafts:[], vocabBatch:null,
+  // 帳號管理：清單篩選 + 批次建立
+  uFilterUnit:'all', uFilterRole:'all', batch:null };
 function resetK(){ Sa.k={ qid:null, stem:'', answers:['','','',''], correctIdx:0, explain:'', quizNote:'', flashAnswer:'' }; }
 resetK();
 const root=()=>document.getElementById('root');
@@ -304,7 +306,10 @@ async function delQ(id){ if(!confirm('確定刪除此題？'))return; try{ await
    ===================================================================== */
 function viewUsers(){
   const list=Sa.profiles||[];
-  return `
+  const fUnit=Sa.uFilterUnit||'all', fRole=Sa.uFilterRole||'all';
+  const shown=list.filter(x=> (fRole==='all'||x.role===fRole)
+    && (fUnit==='all' || (fUnit==='none' ? !x.unit : x.unit===fUnit)) );
+  return `${batchModalHTML()}
   <div class="admin-hint">💡 在這裡建立員工帳號。員工用<b>員工編號（H台籍／T外籍 + 4碼）+ 密碼</b>登入；預設密碼由你設定，員工<b>首次登入會被要求改成自己的密碼</b>。忘記密碼時由你在此重設。</div>
   <div class="cols2">
     <div class="card">
@@ -326,10 +331,22 @@ function viewUsers(){
       <label class="fld">預設密碼（至少 6 碼）</label>
       <input id="nu_pw" placeholder="例如 care1234">
       <button class="btn block" style="margin-top:16px" id="nu_btn" onclick="createStaff()">建立帳號</button>
+      <button class="btn sec block" style="margin-top:10px" onclick="openBatch()">📋 批次建立多個帳號</button>
     </div>
     <div class="card">
-      <div class="card-h">所有帳號（${list.length}）</div>
-      ${list.map(x=>{ const r=roleOf(x.role); const isSelf = Auth.profile() && x.id===Auth.profile().id;
+      <div class="card-h">所有帳號（${shown.length}${shown.length!==list.length?`/${list.length}`:''}）</div>
+      <div class="inline" style="gap:8px;margin:0 0 12px;flex-wrap:wrap">
+        <select onchange="Sa.uFilterRole=this.value;render()" style="flex:1;min-width:130px;font-size:13px">
+          <option value="all" ${fRole==='all'?'selected':''}>職務：全部</option>
+          ${ROLES.map(r=>`<option value="${r.key}" ${fRole===r.key?'selected':''}>${r.emoji} ${r.name}</option>`).join('')}
+        </select>
+        <select onchange="Sa.uFilterUnit=this.value;render()" style="flex:1;min-width:130px;font-size:13px">
+          <option value="all" ${fUnit==='all'?'selected':''}>單位：全部</option>
+          <option value="none" ${fUnit==='none'?'selected':''}>未分單位</option>
+          ${UNITS.map(u=>`<option value="${u.code}" ${fUnit===u.code?'selected':''}>${esc(u.name)}（${u.code}）</option>`).join('')}
+        </select>
+      </div>
+      ${shown.map(x=>{ const r=roleOf(x.role); const isSelf = Auth.profile() && x.id===Auth.profile().id;
         return `<div class="row-item">
           <span class="avatar" style="background:${r.color};width:40px;height:40px">${esc(initials(x.name))}</span>
           <div class="row-body"><div class="t">${esc(x.name)} <span class="tag">${esc(x.employee_id)}</span>${isSelf?' <span class="tag teal">你</span>':''}</div>
@@ -339,7 +356,7 @@ function viewUsers(){
             <button class="btn sec sm" onclick="resetStaffPw('${x.id}','${esc(x.employee_id)}')">重設密碼</button>
             ${isSelf?'':`<button class="btn danger sm" onclick="deleteStaff('${x.id}','${esc(x.name)}')">刪除</button>`}
           </div>
-        </div>`; }).join('') || '<div class="empty">尚無帳號</div>'}
+        </div>`; }).join('') || `<div class="empty">${list.length? '此篩選條件下沒有帳號' : '尚無帳號'}</div>`}
     </div>
   </div>`;
 }
@@ -388,6 +405,81 @@ async function deleteStaff(userId, name){
   if(!confirm(`確定刪除帳號「${name}」？此動作無法復原，該員工的作答紀錄也會一併刪除。`)) return;
   try{ await adminUsers('delete', { userId }); Sa.profiles=await DB.allProfiles(); toast('已刪除'); render(); }
   catch(e){ toast('❌ '+e.message); }
+}
+
+/* =====================================================================
+   批次建立帳號（單獨設定畫面：共用角色 + 預設密碼 abcd1234；每列只填編號+單位）
+   ===================================================================== */
+const BATCH_PW='abcd1234';
+function openBatch(){ Sa.batch={ role:'', lang:'vi', rows:[{id:'',unit:''}] }; window.scrollTo(0,0); render(); }
+function closeBatch(){ Sa.batch=null; render(); }
+function batchSetRole(role){ Sa.batch.role=role; if(role==='foreign_care' && !Sa.batch.lang) Sa.batch.lang='vi'; render(); }
+function batchRowHTML(i){
+  const r=(Sa.batch.rows[i])||{id:'',unit:''};
+  const units=['C','D','E'].map(z=>`<optgroup label="區 ${z}">${UNITS.filter(u=>u.zone===z).map(u=>`<option value="${u.code}" ${r.unit===u.code?'selected':''}>${esc(u.name)}（${u.code}）</option>`).join('')}</optgroup>`).join('');
+  return `<div class="inline" data-idx="${i}" style="gap:8px;margin-bottom:6px">
+    <input style="flex:1" maxlength="5" placeholder="H0002 / T0002" value="${esc(r.id)}" oninput="this.value=this.value.toUpperCase();batchInput(${i},'id',this.value)">
+    <select style="flex:1" onchange="batchInput(${i},'unit',this.value)"><option value="">— 單位（可留空）—</option>${units}</select>
+  </div>`;
+}
+function batchInput(i, field, val){
+  const b=Sa.batch; if(!b) return;
+  (b.rows[i]=b.rows[i]||{id:'',unit:''})[field]=val;
+  // 最後一列有資料 → 自動長出新的空白列（用 DOM 附加，避免整頁重繪造成輸入失焦）
+  const last=b.rows.length-1;
+  if(i===last && ((b.rows[i].id||'').trim() || (b.rows[i].unit||'').trim())){
+    b.rows.push({id:'',unit:''});
+    const box=document.getElementById('batch_rows');
+    if(box) box.insertAdjacentHTML('beforeend', batchRowHTML(b.rows.length-1));
+  }
+}
+function batchModalHTML(){
+  const b=Sa.batch; if(!b) return '';
+  const roleChips=ROLES.map(r=>`<label class="chip-ck ${b.role===r.key?'sel':''}" onclick="batchSetRole('${r.key}')"><input type="radio" name="brole" ${b.role===r.key?'checked':''}>${r.emoji} ${r.name}</label>`).join('');
+  return `<div style="position:fixed;inset:0;background:rgba(15,23,32,.55);display:flex;align-items:flex-start;justify-content:center;padding:24px 14px;z-index:1000;overflow:auto" onclick="if(event.target===this)closeBatch()">
+    <div class="card" style="max-width:560px;width:100%;margin:0;max-height:calc(100vh - 48px);overflow:auto">
+      <div class="card-h" style="justify-content:space-between">📋 批次建立帳號 <button class="btn ghost sm" onclick="closeBatch()">✕</button></div>
+      <div class="note" style="margin:0 0 12px">選好角色後，每列只填<b>員工編號＋單位</b>（姓名預設為員工編號，日後可再改）。全部共用預設密碼 <b>${BATCH_PW}</b>，員工首次登入須改密碼。<b>填了資料就自動長出新的一列</b>，空白列不會建立。</div>
+      <label class="fld" style="margin-top:0">角色（本批共用）</label>
+      <div class="chips">${roleChips}</div>
+      ${b.role==='foreign_care'?`<label class="fld">語言（本批共用）</label>
+        <select onchange="Sa.batch.lang=this.value">${LANGS.map(l=>`<option value="${l.key}" ${b.lang===l.key?'selected':''}>${l.flag} ${l.name}</option>`).join('')}</select>`:''}
+      <div class="inline" style="gap:8px;margin-top:14px;font-size:12px;color:var(--muted)"><span style="flex:1">員工編號（H台籍／T外籍＋4碼）</span><span style="flex:1">單位</span></div>
+      <div id="batch_rows">${b.rows.map((r,i)=>batchRowHTML(i)).join('')}</div>
+      <div class="inline" style="margin-top:16px">
+        <button class="btn ghost" style="flex:1" onclick="closeBatch()">取消</button>
+        <button class="btn" style="flex:2" id="batch_btn" onclick="batchCreate()">建立本批帳號</button>
+      </div>
+    </div></div>`;
+}
+async function batchCreate(){
+  const b=Sa.batch; if(!b) return;
+  if(!b.role){ toast('請先選擇角色'); return; }
+  const rows=b.rows.filter(r=>(r.id||'').trim());
+  if(!rows.length){ toast('請至少填一個員工編號'); return; }
+  const errs=[], seen=new Set();
+  rows.forEach(r=>{ const id=(r.id||'').trim().toUpperCase();
+    if(!/^[HT]\d{4}$/.test(id)) errs.push(`${id||'(空)'}：格式須 H/T+4碼`);
+    else if(seen.has(id)) errs.push(`${id}：本批重覆`);
+    else if(b.role==='foreign_care' && id.charAt(0)!=='T') errs.push(`${id}：外籍照服須 T 開頭`);
+    else if(b.role!=='foreign_care' && id.charAt(0)==='T') errs.push(`${id}：T 開頭應設外籍照服`);
+    seen.add(id);
+  });
+  if(errs.length){ toast('❌ '+errs.slice(0,4).join('；')+(errs.length>4?' …':'')); return; }
+  const btn=document.getElementById('batch_btn'); if(btn){ btn.disabled=true; }
+  let ok=0; const fail=[];
+  for(const r of rows){
+    const id=(r.id||'').trim().toUpperCase();
+    if(btn) btn.textContent=`建立中… ${ok+fail.length}/${rows.length}`;
+    try{
+      const res=await adminUsers('create', { employeeId:id, name:id, role:b.role, password:BATCH_PW });
+      if(res && res.id && (r.unit||'').trim()){ try{ await DB.setUserUnit(res.id, r.unit); }catch(_){} }
+      if(res && res.id && b.role==='foreign_care'){ try{ await DB.setUserLang(res.id, b.lang||'vi'); }catch(_){} }
+      ok++;
+    }catch(e){ fail.push(`${id}：${(e.message||'').slice(0,40)}`); }
+  }
+  Sa.profiles=await DB.allProfiles(); Sa.batch=null; render();
+  toast(fail.length ? `完成 ${ok} 個；失敗 ${fail.length}：${fail.slice(0,3).join('；')}` : `✅ 已建立 ${ok} 個帳號（預設密碼 ${BATCH_PW}）`);
 }
 
 /* =====================================================================
