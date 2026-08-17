@@ -370,6 +370,8 @@ async function createStaff(){
   if(!name){ toast('請輸入姓名'); return; }
   if(!role){ toast('請選擇角色'); return; }
   if(password.length<6){ toast('預設密碼至少 6 碼'); return; }
+  // 防呆：T 開頭為外籍員工，角色必須是「外籍照服」（與註冊／批次一致）
+  if(employeeId.charAt(0)==='T' && role!=='foreign_care'){ toast('T 開頭為外籍員工，角色請選「外籍照服」'); return; }
   // 防呆：H 開頭（台籍慣例）卻設為「外籍照服」→ 需另一位管理員授權才能儲存
   if(role==='foreign_care' && employeeId.charAt(0)==='H'){
     const admId=prompt('⚠️ 防呆確認\n此帳號為 H 開頭（台籍慣例）卻設為「外籍照服」。\n需另一位管理員授權才能儲存。\n\n請輸入授權管理員的員工編號：');
